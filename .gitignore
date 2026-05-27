@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS
+*~
+.DS_Store
+.ipynb_checkpoints/
+
+# Local data cache (downloaded datasets — root only, not src/data/)
+/data/
+
+# Runtime temporaries
+tmp/
+
+# Paper / large binaries
+*.pdf
+
+# Conda / venv (if placed inside project)
+.env/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
