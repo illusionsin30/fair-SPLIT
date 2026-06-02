@@ -1,0 +1,42 @@
+[ACS Income] Downloading 2018 ACS data (California)...
+  Shape: (195665, 10)
+  Class balance:
+ 0    0.589426
+1    0.410574
+Name: proportion, dtype: float64
+============================================================
+Model: CART  |  Dataset: acsincome
+Params: max_depth=6, min_samples_split=10, min_samples_leaf=5
+============================================================
+Test accuracy:           0.7923
+Majority-class baseline: 0.5894
+Split features (63): OCCP, WKHP, WKHP, AGEP, RELP, AGEP, RELP, OCCP, SCHL, SCHL, SCHL, RELP, SCHL, SCHL, SCHL, AGEP, WKHP, SEX, AGEP, AGEP, AGEP, AGEP, AGEP, WKHP, AGEP, POBP, SEX, POBP, SEX, AGEP, AGEP, WKHP, WKHP, AGEP, RELP, SCHL, OCCP, WKHP, RELP, AGEP, SEX, OCCP, COW, AGEP, RELP, OCCP, OCCP, SCHL, SCHL, OCCP, WKHP, OCCP, POBP, RELP, OCCP, SEX, SEX, AGEP, SCHL, AGEP, SCHL, RELP, WKHP
+
+Fairness — SEX:
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   20720    0.7815    0.4523
+               2.0   18413    0.8044    0.3488
+------------------------------------------------
+  Statistical parity diff:  0.1035  (max - min pos rate)
+  Disparate impact ratio:   0.7712  (<0.8 usually unfair)
+  Equal opportunity diff:   0.0299  (TPR gap)
+
+Fairness — RAC1P:
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   24075    0.7885    0.4258
+               2.0    1758    0.7662    0.3521
+               3.0     236    0.7924    0.2585
+               4.0       5    1.0000    0.2000 (!)
+               5.0      94    0.8404    0.2447
+               6.0    6577    0.7859    0.5236
+               7.0     133    0.8120    0.2632
+               8.0    4596    0.8235    0.1643
+               9.0    1659    0.8083    0.3653
+------------------------------------------------
+  (!) n<50: 4.0(n=5)
+  Statistical parity diff:  0.3594  (max - min pos rate)
+  Disparate impact ratio:   0.3137  (<0.8 usually unfair)
+  Equal opportunity diff:   0.3549  (TPR gap)
+Training time: 15.044s

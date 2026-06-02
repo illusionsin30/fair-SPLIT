@@ -69,12 +69,22 @@ def _fetch_uci(dataset_id, num_feats=None, cat_feats=None):
             print(f"    Available columns: {list(X.columns)}")
         num_feats = num_matched
         cat_feats = cat_matched
-        # Any remaining columns become numeric by default
+        # Route unmatched columns by dtype, not blindly to numeric
         used = set(num_feats) | set(cat_feats)
-        extra = [c for c in X.columns if c not in used]
-        if extra:
-            print(f"  Unmatched columns → treated as numeric: {extra}")
-        num_feats = num_feats + extra
+        extra_num = []
+        extra_cat = []
+        for c in X.columns:
+            if c not in used:
+                if pd.api.types.is_numeric_dtype(X[c]):
+                    extra_num.append(c)
+                else:
+                    extra_cat.append(c)
+        if extra_num:
+            print(f"  Unmatched numeric: {extra_num}")
+        if extra_cat:
+            print(f"  Unmatched categorical: {extra_cat}")
+        num_feats = num_feats + extra_num
+        cat_feats = cat_feats + extra_cat
 
     # Drop rows with missing values
     n_before = len(X)
@@ -399,18 +409,22 @@ def load_heloc_data():
 
 
 # ---------- German Credit (UCI #144) ----------
+# ucimlrepo returns columns as Attribute1...Attribute20.
+# 1:Checking account  2:Duration  3:Credit history  4:Purpose
+# 5:Credit amount  6:Savings  7:Employment since  8:Installment rate
+# 9:Personal status & sex  10:Other debtors  11:Residence since
+# 12:Property  13:Age  14:Other installments  15:Housing
+# 16:Existing credits  17:Job  18:Liable people  19:Telephone
+# 20:Foreign worker
 GERMAN_NUMERIC = [
-    "Duration", "Credit amount", "Installment rate",
-    "Present residence since", "Age", "Number of existing credits",
-    "Number of people being liable to provide maintenance for",
+    "Attribute2", "Attribute5", "Attribute8", "Attribute11",
+    "Attribute13", "Attribute16", "Attribute18",
 ]
 GERMAN_CATEGORICAL = [
-    "Status of existing checking account", "Credit history",
-    "Purpose", "Savings account/bonds",
-    "Present employment since", "Personal status and sex",
-    "Other debtors / guarantors", "Property",
-    "Other installment plans", "Housing",
-    "Job", "Telephone", "foreign worker",
+    "Attribute1", "Attribute3", "Attribute4", "Attribute6",
+    "Attribute7", "Attribute9", "Attribute10", "Attribute12",
+    "Attribute14", "Attribute15", "Attribute17", "Attribute19",
+    "Attribute20",
 ]
 GERMAN_TARGET = None  # last column = credit risk
 
@@ -485,16 +499,9 @@ def load_heart_data():
     return X, y, num, cat
 
 
-# ---------- Law School Admissions (folktables / fairlearn) ----------
-_LAW_SCHOOL_URL = (
-    "https://raw.githubusercontent.com/"
-    "propublica/compas-analysis/master/"
-    "compas-scores-two-years.csv"
-)
-
-# Law School dataset is available via fairlearn or a direct CSV.
-# We use a lightweight bundled approach — look for it locally first.
+# ---------- Law School Admissions (Kaggle) ----------
 _LAW_SCHOOL_FILENAME = "law_school_clean.csv"
+_LAW_SCHOOL_DATASET = "danofer/law-school-admissions-bar-passage"
 
 
 def load_law_school_data():
@@ -502,46 +509,13 @@ def load_law_school_data():
 
     Predict whether a law student passes the bar exam.
     Sensitive attributes: race, gender.
-
-    Requires the dataset to be downloaded manually (not redistributable).
-    Set LAW_SCHOOL_DATA_PATH to the CSV location, or place
-    'law_school_clean.csv' under data/law_school/.
-
-    Source: https://github.com/fairlearn/fairlearn/tree/main/test/unit/data
+    Source: Kaggle (danofer/law-school-admissions-bar-passage)
     """
-    import urllib.request
-
-    print("[Law School] Checking for dataset...")
-
-    # 1. Environment variable
-    env_path = os.environ.get("LAW_SCHOOL_DATA_PATH")
-    if env_path and os.path.isfile(env_path):
-        csv_path = env_path
-
-    # 2. Local data directory
-    local = os.path.join("data", "law_school", _LAW_SCHOOL_FILENAME)
-    if not (env_path and os.path.isfile(env_path)):
-        if os.path.isfile(local):
-            csv_path = local
-
-    # 3. Attempt download from fairlearn repository mirror
-    url = (
-        "https://raw.githubusercontent.com/fairlearn/fairlearn/"
-        "main/test/unit/data/law_school_clean.csv"
+    print("[Law School] Loading from Kaggle...")
+    csv_path = _download_kaggle_dataset(
+        _LAW_SCHOOL_DATASET, _LAW_SCHOOL_FILENAME,
+        "law_school", "LAW_SCHOOL_DATA_PATH",
     )
-    try:
-        os.makedirs(os.path.dirname(local), exist_ok=True)
-        urllib.request.urlretrieve(url, local)
-        csv_path = local
-        print(f"  Downloaded to {local}")
-    except Exception:
-        raise FileNotFoundError(
-            "Law School dataset not found.\n\n"
-            "Options:\n"
-            f"  1. Place {_LAW_SCHOOL_FILENAME} under data/law_school/\n"
-            f"  2. Set LAW_SCHOOL_DATA_PATH=/path/to/{_LAW_SCHOOL_FILENAME}\n"
-            f"  3. Download from: {url}\n"
-        )
 
     df = pd.read_csv(csv_path)
     print(f"  Raw shape: {df.shape}")

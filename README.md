@@ -1,43 +1,18 @@
 # fair-SPLIT
 
-Final project of THU 2026-spring course *Statistical Machine Learning*.
-Pure-Python replication of the
-[SPLIT](https://github.com/VarunBabbar/SPLIT-ICML) family of decision tree
-algorithms (ICML 2025 Oral).
+Pure-Python decision tree library implementing
+**CART**, **SPLIT**, **LicketySPLIT**, and **ReSPLIT** —
+a family of sparse, interpretable tree algorithms with built-in
+fairness evaluation and calibration.
 
 ## Models
 
-| Model | Paper | Description |
+| Model | Description | Speed |
 |---|---|---|
-| **CART** | — | Greedy tree with Gini impurity. Continuous features with per-node optimal thresholds. Multiclass & regression. |
-| **SPLIT** | Algorithm 2 | Optimal shallow prefix (DP + greedy-boundary completion) + leaf filling. |
-| **LicketySPLIT** | Algorithm 3 | Polynomial-time recursive SPLIT. Evaluates optimal root split by greedy-completion of subtrees, recurses. |
-| **ReSPLIT** | §5.3 | Rashomon set of near-optimal trees via randomised diverse prefixes + greedy fill. |
-
-All models are **pure Python** — no C++ compilation, no GOSDT dependency.
-
-## Project structure
-
-```
-fair-SPLIT/
-├── src/
-│   ├── train.py              # CLI entry point (python -m src.train)
-│   ├── tree.py               # CART, SPLIT, LicketySPLIT, ReSPLIT
-│   ├── solver.py             # DP optimal prefix + greedy-boundary completion
-│   ├── builder.py            # Entropy-greedy tree builder
-│   ├── evaluate.py           # Accuracy evaluation
-│   ├── utils/
-│   │   ├── nodes.py          # SPLITLeaf / SPLITNode
-│   │   ├── binarizer.py      # NumericBinarizer + ThresholdGuessBinarizer
-│   │   └── helpers.py        # Prediction, tree export, feature listing
-│   └── data/
-│       ├── dataload.py       # 15 dataset loaders
-│       └── process.py        # Target preprocessing
-├── scripts/
-│   └── train.sh              # Convenience launcher
-├── requirements.txt
-└── README.md
-```
+| **CART** | Greedy tree with Gini impurity, continuous & categorical features, per-node optimal thresholds | Fast |
+| **SPLIT** | Optimal lookahead prefix (DP) + greedy leaf completion | Fast |
+| **LicketySPLIT** | Polynomial-time recursive SPLIT — optimal root split evaluated by greedy-subtree completion | Fast |
+| **ReSPLIT** | Rashomon set of near-optimal trees via randomised diverse prefixes | Moderate |
 
 ## Installation
 
@@ -47,8 +22,8 @@ conda activate split
 pip install -r requirements.txt
 
 # Optional
-pip install folktables          # for ACS Income dataset
-pip install kaggle               # for COMPAS/HELOC (kagglehub fallback)
+pip install folktables          # ACS Income dataset
+pip install kaggle               # Kaggle fallback (COMPAS, HELOC, Law School)
 ```
 
 ## Quick start
@@ -56,160 +31,121 @@ pip install kaggle               # for COMPAS/HELOC (kagglehub fallback)
 ```bash
 conda activate split
 
-# CART — raw continuous features, Gini impurity
+# CART on Adult
 bash scripts/train.sh --model cart --dataset adult
 
-# SPLIT — GBDT-threshold binarization, DP prefix + greedy fill
+# SPLIT on Bank Marketing
 bash scripts/train.sh --model split --dataset bank --depth 5 --reg 0.001
 
-# LicketySPLIT — polynomial-time recursive SPLIT
-bash scripts/train.sh --model licketysplit --dataset adult --depth 5 --reg 0.001
+# LicketySPLIT on German Credit
+bash scripts/train.sh --model licketysplit --dataset german --depth 5
 
-# ReSPLIT — Rashomon set with diverse randomised prefixes
+# ReSPLIT Rashomon set on COMPAS
 bash scripts/train.sh --model resplit --dataset compass --num_prefix 30
+
+# Fairness-aware training on ACS Income
+bash scripts/train.sh --model cart --dataset acsincome --fair
+bash scripts/train.sh --model split --dataset acsincome --depth 5 --reg 0.001 --fair
 ```
 
-## Model-specific usage
+## Usage
+
+### Common arguments
+
+```
+--dataset NAME            Dataset (required, see list below)
+--model {cart,split,licketysplit,resplit}
+--test_size FLOAT         Test fraction (default: 0.2)
+--random_state INT        Random seed (default: 42)
+--fair                    Enable fairness preprocessing + calibration
+```
 
 ### CART
 
 ```bash
-bash scripts/train.sh --model cart --dataset adult \
-    --max_depth 6 --min_samples_split 10 --min_samples_leaf 5
-
-# Fair comparison with SPLIT: binarize CART's features too
-bash scripts/train.sh --model cart --dataset adult --binarize_cart
+bash scripts/train.sh --model cart --dataset adult
+bash scripts/train.sh --model cart --dataset adult --max_depth 8
+bash scripts/train.sh --model cart --dataset adult --binarize_cart   # binarized features for fair comparison with SPLIT
+bash scripts/train.sh --model cart --dataset acsincome --fair
 ```
-
-**CART parameters**
 
 | Flag | Default | Description |
 |---|---|---|
 | `--max_depth` | 6 | Maximum tree depth |
-| `--min_samples_split` | 10 | Minimum samples to consider a split |
-| `--min_samples_leaf` | 5 | Minimum samples per leaf |
-| `--binarize_cart` | off | Binarize features like SPLIT (fair comparison) |
+| `--min_samples_split` | 10 | Min samples to split |
+| `--min_samples_leaf` | 5 | Min samples per leaf |
+| `--binarize_cart` | off | Use binarized features (same space as SPLIT) |
 
-CART works on **raw continuous and categorical features** with per-node
-optimal threshold search.  Use `--binarize_cart` to force it onto the same
-feature space as SPLIT for a fair accuracy comparison.
-
-### SPLIT  (Algorithm 2)
+### SPLIT
 
 ```bash
-bash scripts/train.sh --model split --dataset adult \
-    --depth 5 --lookahead 2 --reg 0.001
-
-# Deeper lookahead = more optimal search (slower)
-bash scripts/train.sh --model split --dataset bank \
-    --depth 5 --lookahead 3 --reg 0.0001
-
-# Optimal leaf filling (Phase 2 with DP, not greedy)
-bash scripts/train.sh --model split --dataset spambase \
-    --depth 4 --lookahead 2 --leaf_fill optimal
+bash scripts/train.sh --model split --dataset bank --depth 5 --reg 0.001
+bash scripts/train.sh --model split --dataset adult --depth 5 --lookahead 3 --reg 0.0001
+bash scripts/train.sh --model split --dataset adult --depth 3 --reg 0.01       # sparser tree
+bash scripts/train.sh --model split --dataset spambase --leaf_fill optimal
 ```
-
-**SPLIT parameters**
 
 | Flag | Default | Description |
 |---|---|---|
-| `--depth` | 5 | Total depth budget *d* |
-| `--lookahead` | 2 | Lookahead depth *dl* for optimal prefix |
+| `--depth` | 5 | Total depth budget |
+| `--lookahead` | 2 | Optimal prefix depth |
 | `--reg` | 0.0001 | Sparsity penalty λ per leaf |
-| `--leaf_fill` | greedy | Leaf completion: `greedy` or `optimal` |
-| `--max_features` | 0 | Top‑*K* candidate features in DP (0 = all) |
+| `--leaf_fill` | greedy | `greedy` or `optimal` |
+| `--max_features` | 0 | Top-K candidate features (0 = all) |
 | `--max_thresholds` | 50 | Max midpoints per numeric feature |
-| `--binarizer` | gbdt | Feature binarization: `gbdt` (stump thresholds) or `midpoint` |
-| `--time_limit` | 60 | DP solver time limit (seconds) |
+| `--binarizer` | gbdt | `gbdt` (stump thresholds) or `midpoint` |
+| `--time_limit` | 60 | DP solver timeout (seconds) |
+| `--binarize / --no-binarize` | binarize | Toggle feature binarization |
 
-**How SPLIT differs from the paper**
-
-Our implementation replaces GOSDT (C++ branch-and-bound) with a pure-Python
-DP solver.  At the lookahead boundary (`depth == 0`), the DP uses greedy
-completion to evaluate subproblems, matching the paper's Equation 4 branch ②
-and Algorithm 1.  Phase 2 fills leaves with either greedy or optimal (DP)
-trees.  The paper uses GOSDT for both phases — our DP is algorithmically
-equivalent but searches fewer subproblems per second.
-
-### LicketySPLIT  (Algorithm 3)
+### LicketySPLIT
 
 ```bash
-bash scripts/train.sh --model licketysplit --dataset adult \
-    --depth 5 --reg 0.001
-
-# On a smaller, faster dataset
-bash scripts/train.sh --model licketysplit --dataset german \
-    --depth 4 --reg 0.001
+bash scripts/train.sh --model licketysplit --dataset adult --depth 5 --reg 0.001
+bash scripts/train.sh --model licketysplit --dataset german --depth 4
 ```
-
-**LicketySPLIT parameters**
 
 | Flag | Default | Description |
 |---|---|---|
 | `--depth` | 5 | Total depth budget |
 | `--lookahead` | 2 | Lookahead range (≥ 2) |
-| `--reg` | 0.0001 | Sparsity penalty λ per leaf |
 
-LicketySPLIT is **polynomial-time** — O(n·k²·d²) per Theorem 6.4.  At each
-recursion step it evaluates every candidate feature by building a greedy
-subtree at depth *d*‑1 for both children, then picks the best.  It's often
-the best trade-off between speed and accuracy among our four models.
-
-### ReSPLIT  (§5.3)
+### ReSPLIT
 
 ```bash
-bash scripts/train.sh --model resplit --dataset compass \
-    --num_prefix 30 --rashomon_bound 0.02
-
-# Larger Rashomon set
-bash scripts/train.sh --model resplit --dataset bank \
-    --num_prefix 50 --rashomon_bound 0.05 --depth 5 --lookahead 3
+bash scripts/train.sh --model resplit --dataset compass --num_prefix 20
+bash scripts/train.sh --model resplit --dataset bank --num_prefix 50 --rashomon_bound 0.05
+bash scripts/train.sh --model resplit --dataset adult --num_prefix 30 --depth 5 --lookahead 3
 ```
-
-**ReSPLIT parameters**
 
 | Flag | Default | Description |
 |---|---|---|
-| `--num_prefix` | 20 | Number of randomised prefix candidates |
-| `--rashomon_bound` | 0.01 | ε threshold: keep trees with loss ≤ (1+ε)·L* |
+| `--num_prefix` | 20 | Randomised prefix candidates |
+| `--rashomon_bound` | 0.01 | ε: keep trees with loss ≤ (1+ε)·best |
 | `--depth` | 5 | Total depth budget |
 | `--lookahead` | 2 | Prefix depth |
-| `--reg` | 0.0001 | Sparsity penalty λ per leaf |
 
-Diversity comes from **shuffled feature evaluation order** with
-`pick_first` mode: each prefix candidate picks the first feature with
-positive entropy gain in its shuffled order, producing structurally
-different trees.  Deduplication removes identical trees; the Rashomon
-threshold filters out those whose regularized loss is above the bound.
+### Fairness evaluation
 
-**ReSPLIT differs from the paper** in that we enumerate prefixes via
-randomised greedy induction rather than TreeFARMS' exact Rashomon-set
-prefix enumeration.  This trades runtime and completeness for simplicity.
+```bash
+# Preprocessing + postprocessing
+bash scripts/train.sh --model cart --dataset acsincome --fair
+bash scripts/train.sh --model split --dataset adult --depth 5 --fair
 
-## CLI reference
-
-### Shared data parameters
-
-```
---dataset {adult,bike,spambase,bank,covertype,compass,heloc,thyroid,
-           german,communities,heart,lawschool,acsincome,iris,diabetes}
---test_size FLOAT        Test fraction (default: 0.2)
---random_state INT       Random seed (default: 42)
+# Only evaluate (no preprocessing)
+bash scripts/train.sh --model split --dataset adult --depth 5
 ```
 
-### Shared SPLIT / ReSPLIT / LicketySPLIT parameters
+When `--fair` is enabled:
+1. **Preprocessing**: sensitive columns (sex, race, etc.) are dropped from features before training.
+2. **Postprocessing**: per-group prediction thresholds are calibrated to equalize positive prediction rates (demographic parity).
 
-```
---binarizer {gbdt,midpoint}   Binarization method (default: gbdt)
---binarize / --no-binarize    Binarize features (default: --binarize)
---max_features INT            Top-K features in DP/builder (0=all, default: 0)
---max_thresholds INT          Max midpoints per numeric feature (default: 50)
---time_limit INT              DP timeout in seconds (default: 60)
-```
+Output includes per-group accuracy, positive prediction rate, statistical parity difference,
+disparate impact ratio, and equal opportunity difference — before and after calibration.
+Groups with fewer than 50 test samples are flagged `(!)` and excluded from aggregate metrics.
 
 ## Datasets
 
-### SPLIT paper benchmarks (ICML 2025)
+### SPLIT paper benchmarks
 
 | CLI name | Dataset | Source | Samples | Task |
 |---|---|---|---|---|
@@ -226,10 +162,13 @@ prefix enumeration.  This trades runtime and completeness for simplicity.
 
 | CLI name | Dataset | Source | Samples | Sensitive attributes |
 |---|---|---|---|---|
-| `german` | German Credit | UCI #144 | 1K | gender, age |
+| `adult` | Adult | UCI #2 | 48K | sex, race |
+| `compass` | COMPAS | Kaggle | 18K | sex, race |
+| `german` | German Credit | UCI #144 | 1K | sex+status, age |
 | `communities` | Communities & Crime | UCI #183 | 2K | race |
-| `lawschool` | Law School Admissions | fairlearn | 20K | race, gender |
-| `acsincome` | ACS Income (2018 CA) | folktables | 195K | race, sex |
+| `lawschool` | Law School Admissions | Kaggle | 20K | race, gender |
+| `acsincome` | ACS Income (2018 CA) | folktables | 196K | sex, race |
+| `bank` | Bank Marketing | UCI #222 | 45K | marital, age |
 
 ### Classic benchmarks
 
@@ -241,86 +180,52 @@ prefix enumeration.  This trades runtime and completeness for simplicity.
 
 ### Dataset prerequisites
 
-| Datasets | Package | Notes |
+| Datasets | Required package | First run |
 |---|---|---|
-| UCI datasets (adult, bike, …) | `ucimlrepo` | Auto-download |
-| compass, heloc | `kagglehub` or `kaggle` CLI | Auto-download from Kaggle |
-| lawschool | none | Auto-download from fairlearn mirror; override with `$LAW_SCHOOL_DATA_PATH` |
+| UCI (adult, bike, spambase, bank, covertype, thyroid, german, communities, heart) | `ucimlrepo` | Auto-download |
+| Kaggle (compass, heloc, lawschool) | `kagglehub` or `kaggle` CLI | Auto-download |
 | acsincome | `folktables` | ~200 MB download |
 | iris, diabetes | `scikit-learn` | Bundled |
 
-## Examples
+Sensitive attributes are auto-detected per dataset.  If a column name does
+not match (e.g. ucimlrepo returns `Attribute9` instead of a descriptive name),
+the fairness panel simply reports under that name — functionality is unaffected.
 
-### Quick comparisons
+## Output
 
-```bash
-# CART (raw features) vs SPLIT (binarized features)
-bash scripts/train.sh --model cart  --dataset adult
-bash scripts/train.sh --model split --dataset adult --depth 5 --reg 0.001
+Training logs are saved to `results/` with the naming scheme:
 
-# Fair comparison: both on binarized features
-bash scripts/train.sh --model cart  --dataset adult --binarize_cart
-bash scripts/train.sh --model split --dataset adult --depth 5 --reg 0.001
-
-# SPLIT vs LicketySPLIT
-bash scripts/train.sh --model split --dataset bank --depth 5 --lookahead 2
-bash scripts/train.sh --model licketysplit --dataset bank --depth 5
+```
+results/{model}-{dataset}-d{depth}-{bin/raw}-{fair/nofair}.log
 ```
 
-### Rashomon set exploration
+Each log contains the model parameters, test accuracy, majority baseline,
+the list of features used for splits, per-group fairness metrics, and the
+full tree structure.
 
-```bash
-# Small Rashomon set
-bash scripts/train.sh --model resplit --dataset compass \
-    --num_prefix 20 --rashomon_bound 0.01
+## Project structure
 
-# Large and diverse
-bash scripts/train.sh --model resplit --dataset bank \
-    --num_prefix 50 --rashomon_bound 0.05 --depth 5 --lookahead 3
 ```
-
-### Sparsity tuning
-
-```bash
-# Very sparse (high λ)
-bash scripts/train.sh --model split --dataset adult --reg 0.01 --depth 3
-
-# Dense / accurate (low λ)  
-bash scripts/train.sh --model split --dataset adult --reg 0.0001 --depth 5
+fair-SPLIT/
+├── src/
+│   ├── train.py              # CLI entry (python -m src.train)
+│   ├── tree.py               # CART, SPLIT, LicketySPLIT, ReSPLIT
+│   ├── solver.py             # DP optimal prefix solver
+│   ├── builder.py            # Entropy-greedy tree builder
+│   ├── evaluate.py           # Accuracy & fairness evaluation
+│   ├── utils/
+│   │   ├── nodes.py          # SPLITLeaf / SPLITNode
+│   │   ├── binarizer.py      # NumericBinarizer + ThresholdGuessBinarizer
+│   │   ├── helpers.py        # Prediction, tree export, feature listing
+│   │   └── fairness.py       # Fair preprocessing + postprocessing calibration
+│   └── data/
+│       ├── dataload.py       # 15 dataset loaders
+│       ├── process.py        # Target preprocessing
+│       └── __init__.py
+├── scripts/
+│   └── train.sh
+├── results/                  # Training logs
+├── requirements.txt
+├── LICENSE
+└── README.md
 ```
-
-### Python API
-
-```bash
-python -m src.train --model cart --dataset adult
-python -m src.train --model split --dataset bank --depth 5 --reg 0.001
-python -m src.train --model licketysplit --dataset adult --depth 5
-python -m src.train --model resplit --dataset compass --num_prefix 30
-```
-
-## Data preprocessing
-
-All models share the **same train/test split** for direct comparison.
-
-- **CART** (default): Receives raw features (numeric + categorical) and
-  handles them natively via Gini-based threshold and category-subset splits.
-- **CART** (`--binarize_cart`): Same binarized features as SPLIT for fair
-  comparison.
-- **SPLIT / LicketySPLIT / ReSPLIT**: Features are binarized via GBDT
-  stump threshold guessing (`--binarizer gbdt`, default) or midpoint
-  binarization (`--binarizer midpoint`).  Multiclass targets are kept
-  as-is; regression targets are binarized at the median.
-
-## Differences from the original paper
-
-| Aspect | Paper (C++ GOSDT) | Our implementation |
-|---|---|---|
-| Optimal prefix search | GOSDT branch-and-bound + similar-support bounds + caching | Pure-Python DP with greedy-boundary completion |
-| Leaf filling (Phase 2) | GOSDT optimal subtree | Greedy or DP (set by `--leaf_fill`) |
-| Binarization | GBDT stump thresholds + column elimination | GBDT stump thresholds (column elimination disabled by default) |
-| ReSPLIT prefix enumeration | TreeFARMS exact Rashomon-set enumeration | Randomised greedy prefixes with `pick_first` diversity |
-| CART baseline | Greedy on binarized features | Greedy on raw continuous features (use `--binarize_cart` for parity) |
-
-These trade-offs make our implementation **slower at optimal search**
-but **algorithmically faithful** to the paper's objective function
-(Equation 4 with greedy-completion at the lookahead boundary).

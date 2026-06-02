@@ -1,0 +1,80 @@
+[ACS Income] Downloading 2018 ACS data (California)...
+  Shape: (195665, 10)
+  Class balance:
+ 0    0.589426
+1    0.410574
+Name: proportion, dtype: float64
+============================================================
+Model: SPLIT  |  Dataset: acsincome
+Params: lookahead=2, depth=5, reg=0.001, leaf_fill=greedy, max_features=all
+============================================================
+[SPLIT] Binarized features: 10, greedy leaves: 2, greedy loss: 0.376415
+[Solver] 10 feats, top-10 candidates, leaf=0.411574, ub=0.376415
+[Solver]   top: 0(nl=156532), 1(nl=156532), 2(nl=156532), 3(nl=156532), 4(nl=156532)
+[SPLIT] Optimal prefix loss: 0.411574, leaves: 1
+Test accuracy:           0.6300
+Majority-class baseline: 0.5894
+Number of leaves: 2
+Split features (1): f6
+
+Fairness — SEX:
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   20720    0.6437    0.4800
+               2.0   18413    0.6146    0.4441
+------------------------------------------------
+  Statistical parity diff:  0.0359  (max - min pos rate)
+  Disparate impact ratio:   0.9251  (<0.8 usually unfair)
+  Equal opportunity diff:   0.0481  (TPR gap)
+  [FairCalibrate] SP diff: 0.0359 → 0.0000 (target rate=0.4631)
+
+Fairness — SEX (calibrated):
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   20720    0.6606    0.4631
+               2.0   18413    0.6336    0.4631
+------------------------------------------------
+  Statistical parity diff:  0.0000  (max - min pos rate)
+  Disparate impact ratio:   0.9999  (<0.8 usually unfair)
+  Equal opportunity diff:   0.0066  (TPR gap)
+  Calibrated accuracy: 0.6479 (was 0.6300, Δ=+0.0179)
+
+Fairness — RAC1P:
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   24075    0.6269    0.4868
+               2.0    1758    0.6365    0.4545
+               3.0     236    0.6822    0.4195
+               4.0       5    0.8000    0.4000 (!)
+               5.0      94    0.7128    0.4362
+               6.0    6577    0.6235    0.4394
+               7.0     133    0.6165    0.3534
+               8.0    4596    0.6360    0.3919
+               9.0    1659    0.6649    0.4364
+------------------------------------------------
+  (!) n<50: 4.0(n=5)
+  Statistical parity diff:  0.1334  (max - min pos rate)
+  Disparate impact ratio:   0.7259  (<0.8 usually unfair)
+  Equal opportunity diff:   0.4056  (TPR gap)
+  [FairCalibrate] SP diff: 0.1334 → 0.0681 (target rate=0.4631)
+
+Fairness — RAC1P (calibrated):
+           Group       n       Acc   PosRate
+------------------------------------------------
+               1.0   24075    0.6506    0.4631
+               2.0    1758    0.6451    0.4630
+               3.0     236    0.7246    0.4619
+               4.0       5    0.8000    0.4000 (!)
+               5.0      94    0.7447    0.4681
+               6.0    6577    0.6473    0.4631
+               7.0     133    0.7293    0.4662
+               8.0    4596    0.7071    0.4630
+               9.0    1659    0.6914    0.4629
+------------------------------------------------
+  (!) n<50: 4.0(n=5)
+  Statistical parity diff:  0.0062  (max - min pos rate)
+  Disparate impact ratio:   0.9867  (<0.8 usually unfair)
+  Equal opportunity diff:   0.3845  (TPR gap)
+  Calibrated accuracy: 0.6591 (was 0.6300, Δ=+0.0292)
+Training time: 0.058s
+{ feature: 6 [ left child: { prediction: 0, loss: 0.16047198017018885 }, right child: { prediction: 1, loss: 0.2139434748166509 }] }

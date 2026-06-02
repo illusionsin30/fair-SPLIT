@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -29,7 +30,8 @@ from .data import (
     load_iris_data, load_diabetes_data,
 )
 from .data import prepare_for_split
-from .evaluate import evaluate_classification
+from .evaluate import evaluate_classification, evaluate_fairness
+from .utils.fairness import fair_preprocess, fair_calibrate
 from .tree import CART, SPLIT, ReSPLIT, LicketySPLIT
 from .utils.helpers import used_split_features
 
@@ -45,6 +47,34 @@ DATASET_CHOICES = [
     # sklearn
     "iris", "diabetes",
 ]
+
+# Sensitive attributes for fairness evaluation (column names in raw data)
+SENSITIVE_ATTRS = {
+    "adult": ["sex", "race"],
+    "compass": ["sex", "race"],
+    "german": ["Attribute9", "Attribute13"],  # sex+status, age
+    "bank": ["marital", "age"],
+    "lawschool": ["gender", "race"],
+    "acsincome": ["SEX", "RAC1P"],
+    "communities": ["racepctblack"],
+}
+
+
+def _run_fairness_eval(y_test, y_pred, sensitive_test, args, label=""):
+    """Evaluate fairness using pre-extracted sensitive values."""
+    if not sensitive_test:
+        return
+    for col, vals in sensitive_test.items():
+        tag = f"{col}{' ' + label if label else ''}"
+        evaluate_fairness(y_test, y_pred, vals, name=tag)
+        if args.fair:
+            from sklearn.metrics import accuracy_score
+            y_cal = fair_calibrate(y_pred, y_test, vals)
+            evaluate_fairness(y_test, y_cal, vals, name=f"{col} (calibrated)")
+            acc_before = accuracy_score(y_test, y_pred)
+            acc_after = accuracy_score(y_test, y_cal)
+            print(f"  Calibrated accuracy: {acc_after:.4f}"
+                  f" (was {acc_before:.4f}, Δ={acc_after - acc_before:+.4f})")
 
 
 def get_parser():
@@ -80,6 +110,10 @@ Examples:
     parser.add_argument(
         "--random_state", type=int, default=42,
         help="Random seed (default: 42).",
+    )
+    parser.add_argument(
+        "--fair", action="store_true", default=False,
+        help="Drop sensitive columns + per-group threshold calibration.",
     )
 
     # --- CART ---
@@ -168,20 +202,42 @@ def _train_test_split(X, y, test_size, random_state):
     )
 
 
-def prepare_data(name, test_size, random_state):
+def prepare_data(name, test_size, random_state, fair=False):
     """Load, preprocess target, split.
+
+    Args:
+        fair: If True, drop known sensitive columns before training.
 
     Returns:
         (X_train, X_test, y_train, y_test, num_feats, cat_feats)
-        Same split for all models.  Feature-type lists are only consumed
-        by CART; SPLIT/ReSPLIT binarize everything internally.
+        Same split for all models.
     """
     X, y, num_feats, cat_feats = load_dataset(name)
     X, y = prepare_for_split(X, y)
+
+    # Save sensitive values for fairness evaluation before dropping
+    sensitive_data = {}
+    for col in SENSITIVE_ATTRS.get(name, []):
+        if col in X.columns:
+            sensitive_data[col] = X[col].copy()
+
+    # Fair pre-processing: drop sensitive columns
+    if fair:
+        sensitive_cols = list(sensitive_data.keys())
+        X, _ = fair_preprocess(X, sensitive_cols)
+        num_feats = [c for c in num_feats if c in X.columns]
+        cat_feats = [c for c in cat_feats if c in X.columns]
+
     X_train, X_test, y_train, y_test = _train_test_split(
         X, y, test_size, random_state,
     )
-    return X_train, X_test, y_train, y_test, num_feats, cat_feats
+
+    # Align sensitive data with test split
+    sensitive_test = {}
+    for col, vals in sensitive_data.items():
+        sensitive_test[col] = vals.iloc[X_test.index].values
+
+    return X_train, X_test, y_train, y_test, num_feats, cat_feats, sensitive_test
 
 
 # ------------------------------------------------------------------
@@ -191,8 +247,9 @@ def prepare_data(name, test_size, random_state):
 def train_cart(args):
     """Train the CART model (classification)."""
     (X_train, X_test, y_train, y_test,
-     num_feats, cat_feats) = prepare_data(
+     num_feats, cat_feats, sensitive_test) = prepare_data(
         args.dataset, args.test_size, args.random_state,
+        fair=args.fair,
     )
 
     # If --binarize_cart is set, binarize features before passing to CART
@@ -225,12 +282,13 @@ def train_cart(args):
 
     evaluate_classification(y_test, y_pred, y_train)
     _show_used_features(model)
+    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
     print(f"Training time: {elapsed:.3f}s")
 
 
 def train_split(args):
     """Train the SPLIT model."""
-    X_train, X_test, y_train, y_test, _, _ = prepare_data(
+    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
         args.dataset, args.test_size, args.random_state,
     )
 
@@ -256,13 +314,14 @@ def train_split(args):
     evaluate_classification(y_test, y_pred, y_train)
     print(f"Number of leaves: {model.num_leaves()}")
     _show_used_features(model)
+    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
     print(f"Training time: {elapsed:.3f}s")
     print(model.tree)
 
 
 def train_resplit(args):
     """Train the ReSPLIT model."""
-    X_train, X_test, y_train, y_test, _, _ = prepare_data(
+    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
         args.dataset, args.test_size, args.random_state,
     )
 
@@ -298,6 +357,7 @@ def train_resplit(args):
     y_best = model.predict(X_test, idx=0)
     evaluate_classification(y_test, y_best, y_train)
     _show_used_features(model)
+    _run_fairness_eval(y_test, y_best, X_test, args.dataset)
     print(f"Training time: {elapsed:.3f}s")
 
 
@@ -355,7 +415,7 @@ def _param_summary(model_name, args):
 # ------------------------------------------------------------------
 def train_licketysplit(args):
     """Train the LicketySPLIT model."""
-    X_train, X_test, y_train, y_test, _, _ = prepare_data(
+    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
         args.dataset, args.test_size, args.random_state,
     )
 
@@ -382,6 +442,7 @@ def train_licketysplit(args):
     evaluate_classification(y_test, y_pred, y_train)
     print(f"Number of leaves: {model.num_leaves()}")
     _show_used_features(model)
+    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
     print(f"Training time: {elapsed:.3f}s")
     print(model.tree)
 
@@ -398,10 +459,51 @@ DISPATCH = {
 }
 
 
+class _Tee:
+    """Write to both stdout and a log file."""
+    def __init__(self, filepath):
+        self.terminal = sys.stdout
+        self.log = open(filepath, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+
+def _make_filename(args):
+    """Build log filename: model-dataset-d{depth}-{bin/raw}-{fair/nofair}.log"""
+    model = args.model
+    dataset = args.dataset
+    depth = getattr(args, "max_depth", None) or getattr(
+        args, "full_depth_budget", 5)
+    # CART: binarized only if --binarize_cart; SPLIT family: always binarized
+    if model == "cart":
+        binarize = "bin" if getattr(args, "binarize_cart", False) else "raw"
+    else:
+        binarize = "raw" if getattr(args, "binarize", True) is False else "bin"
+    fair = "fair" if args.fair else "nofair"
+    return os.path.join("results", f"{model}-{dataset}-d{depth}-{binarize}-{fair}.log")
+
+
 def main(argv=None):
     parser = get_parser()
     args = parser.parse_args(argv)
-    DISPATCH[args.model](args)
+
+    log_path = _make_filename(args)
+    os.makedirs("results", exist_ok=True)
+    tee = _Tee(log_path)
+    sys.stdout = tee
+
+    try:
+        DISPATCH[args.model](args)
+    finally:
+        sys.stdout = tee.terminal
+        tee.log.close()
+        print(f"Log saved to: {log_path}")
 
 
 if __name__ == "__main__":

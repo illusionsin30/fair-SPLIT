@@ -1,0 +1,162 @@
+[German Credit] Loading from UCI repository...
+  Shape: (1000, 20)  |  Classes: [np.int64(1), np.int64(2)]
+  Class balance:
+ 0    0.7
+1    0.3
+Name: proportion, dtype: float64
+============================================================
+Model: SPLIT  |  Dataset: german
+Params: lookahead=2, depth=5, reg=0.001, leaf_fill=greedy, max_features=all
+============================================================
+  [Binarizer] 7 numeric, 13 categorical (of 20 total)
+    categorical: ['Attribute1', 'Attribute3', 'Attribute4', 'Attribute6', 'Attribute7', 'Attribute9', 'Attribute10', 'Attribute12', 'Attribute14', 'Attribute15', 'Attribute17', 'Attribute19', 'Attribute20']
+[SPLIT] Binarized features: 71, greedy leaves: 4, greedy loss: 0.304000
+[Solver] 71 feats, top-71 candidates, leaf=0.301000, ub=0.304000
+[Solver]   top: 0(nl=74), 1(nl=144), 2(nl=348), 3(nl=665), 4(nl=753)
+[SPLIT] Optimal prefix loss: 0.248250, leaves: 32 (greedy-filled at boundary)
+Test accuracy:           0.7050
+Majority-class baseline: 0.7000
+Number of leaves: 98
+Split features (97): Attribute2 <= 8.500000, Attribute13 <= 34.500000, Attribute2 <= 11.500000, Attribute12=A122, Attribute3=A31, Attribute12=A121, Attribute1=A14, Attribute7=A72, Attribute9=A91, Attribute4=A42, Attribute13 <= 34.500000, Attribute7=A74, Attribute6=A61, Attribute4=A45, Attribute5 <= 1373.000000, Attribute13 <= 25.500000, Attribute4=A40, Attribute3=A31, Attribute3=A33, Attribute5 <= 3913.500000, Attribute2 <= 15.500000, Attribute5 <= 1373.000000, Attribute1=A11, Attribute5 <= 959.500000, Attribute5 <= 1373.000000, Attribute8 <= 3.500000, Attribute2 <= 15.500000, Attribute5 <= 11307.000000, Attribute5 <= 1373.000000, Attribute5 <= 11307.000000, Attribute8 <= 3.500000, Attribute2 <= 34.500000, Attribute4=A46, Attribute8 <= 3.500000, Attribute4=A45, Attribute6=A65, Attribute7=A75, Attribute12=A123, Attribute7=A73, Attribute2 <= 47.500000, Attribute3=A32, Attribute6=A64, Attribute9=A93, Attribute3=A32, Attribute7=A72, Attribute5 <= 1373.000000, Attribute4=A46, Attribute3=A31, Attribute4=A41, Attribute7=A75, Attribute7=A73, Attribute1=A12, Attribute5 <= 7839.500000, Attribute4=A41, Attribute7=A74, Attribute5 <= 430.500000, Attribute4=A46, Attribute7=A71, Attribute4=A42, Attribute6=A65, Attribute13 <= 52.500000, Attribute16 <= 1.500000, Attribute16 <= 1.500000, Attribute3=A34, Attribute13 <= 52.500000, Attribute3=A30, Attribute4=A40, Attribute4=A40, Attribute5 <= 430.500000, Attribute8 <= 3.500000, Attribute3=A30, Attribute5 <= 7839.500000, Attribute1=A11, Attribute16 <= 1.500000, Attribute5 <= 3913.500000, Attribute3=A32, Attribute13 <= 34.500000, Attribute3=A34, Attribute1=A11, Attribute5 <= 3913.500000, Attribute5 <= 1373.000000, Attribute13 <= 34.500000, Attribute8 <= 3.500000, Attribute13 <= 25.500000, Attribute2 <= 15.500000, Attribute5 <= 430.500000, Attribute13 <= 25.500000, Attribute13 <= 52.500000, Attribute13 <= 25.500000, Attribute2 <= 34.500000, Attribute8 <= 3.500000, Attribute5 <= 7839.500000, Attribute13 <= 34.500000, Attribute13 <= 34.500000, Attribute5 <= 3913.500000, Attribute16 <= 1.500000, Attribute2 <= 47.500000
+
+Fairness — Attribute9:
+           Group       n       Acc   PosRate
+------------------------------------------------
+               A91       9    0.5556    0.3333 (!)
+               A92      61    0.7049    0.2623
+               A93     118    0.7034    0.2797
+               A94      12    0.8333    0.2500 (!)
+------------------------------------------------
+  (!) n<50: A91(n=9), A94(n=12)
+  Statistical parity diff:  0.0174  (max - min pos rate)
+  Disparate impact ratio:   0.9379  (<0.8 usually unfair)
+  Equal opportunity diff:   0.0206  (TPR gap)
+  [FairCalibrate] SP diff: 0.0833 → 0.0565 (target rate=0.2750)
+
+Fairness — Attribute9 (calibrated):
+           Group       n       Acc   PosRate
+------------------------------------------------
+               A91       9    0.6667    0.2222 (!)
+               A92      61    0.7213    0.2787
+               A93     118    0.7119    0.2712
+               A94      12    0.8333    0.2500 (!)
+------------------------------------------------
+  (!) n<50: A91(n=9), A94(n=12)
+  Statistical parity diff:  0.0075  (max - min pos rate)
+  Disparate impact ratio:   0.9731  (<0.8 usually unfair)
+  Equal opportunity diff:   0.0294  (TPR gap)
+  Calibrated accuracy: 0.7200 (was 0.7050, Δ=+0.0150)
+
+Fairness — Attribute13:
+           Group       n       Acc   PosRate
+------------------------------------------------
+                20       2    0.5000    0.5000 (!)
+                21       4    0.7500    0.2500 (!)
+                22       4    0.2500    0.5000 (!)
+                23      17    0.7059    0.4118 (!)
+                24      12    0.7500    0.4167 (!)
+                25       5    0.8000    0.0000 (!)
+                26      11    0.5455    0.2727 (!)
+                27       5    0.8000    0.2000 (!)
+                28       9    0.6667    0.3333 (!)
+                29      10    0.5000    0.5000 (!)
+                30       4    0.7500    0.5000 (!)
+                31       7    0.5714    0.2857 (!)
+                32       6    1.0000    0.3333 (!)
+                33       5    1.0000    0.2000 (!)
+                34       4    0.7500    0.2500 (!)
+                35       5    1.0000    0.0000 (!)
+                36       6    0.6667    0.1667 (!)
+                37       8    0.5000    0.2500 (!)
+                38       3    0.6667    0.3333 (!)
+                39       2    1.0000    0.0000 (!)
+                40       7    0.7143    0.1429 (!)
+                41       4    1.0000    0.0000 (!)
+                42       6    0.6667    0.1667 (!)
+                43       4    0.2500    0.5000 (!)
+                44       2    0.5000    0.0000 (!)
+                45       3    0.6667    0.3333 (!)
+                46       1    1.0000    0.0000 (!)
+                47       5    0.8000    0.0000 (!)
+                48       4    1.0000    0.2500 (!)
+                49       3    1.0000    0.0000 (!)
+                50       3    1.0000    0.3333 (!)
+                51       2    0.5000    0.0000 (!)
+                52       1    1.0000    0.0000 (!)
+                53       2    1.0000    0.5000 (!)
+                54       3    0.3333    0.3333 (!)
+                55       1    0.0000    1.0000 (!)
+                56       1    1.0000    0.0000 (!)
+                57       2    1.0000    0.0000 (!)
+                58       1    0.0000    1.0000 (!)
+                59       1    1.0000    0.0000 (!)
+                60       2    1.0000    0.5000 (!)
+                61       2    1.0000    0.0000 (!)
+                63       4    0.7500    0.2500 (!)
+                64       2    0.0000    1.0000 (!)
+                67       1    1.0000    0.0000 (!)
+                68       2    0.5000    0.0000 (!)
+                74       1    1.0000    0.0000 (!)
+                75       1    1.0000    0.0000 (!)
+------------------------------------------------
+  (!) n<50: 20(n=2), 21(n=4), 22(n=4), 23(n=17), 24(n=12), 25(n=5), 26(n=11), 27(n=5), 28(n=9), 29(n=10), 30(n=4), 31(n=7), 32(n=6), 33(n=5), 34(n=4), 35(n=5), 36(n=6), 37(n=8), 38(n=3), 39(n=2), 40(n=7), 41(n=4), 42(n=6), 43(n=4), 44(n=2), 45(n=3), 46(n=1), 47(n=5), 48(n=4), 49(n=3), 50(n=3), 51(n=2), 52(n=1), 53(n=2), 54(n=3), 55(n=1), 56(n=1), 57(n=2), 58(n=1), 59(n=1), 60(n=2), 61(n=2), 63(n=4), 64(n=2), 67(n=1), 68(n=2), 74(n=1), 75(n=1)
+  Too few large groups for fairness comparison.
+  [FairCalibrate] SP diff: 1.0000 → 0.5000 (target rate=0.2750)
+
+Fairness — Attribute13 (calibrated):
+           Group       n       Acc   PosRate
+------------------------------------------------
+                20       2    0.5000    0.5000 (!)
+                21       4    0.7500    0.2500 (!)
+                22       4    0.5000    0.2500 (!)
+                23      17    0.8235    0.2941 (!)
+                24      12    0.5833    0.2500 (!)
+                25       5    1.0000    0.2000 (!)
+                26      11    0.5455    0.2727 (!)
+                27       5    0.8000    0.2000 (!)
+                28       9    0.7778    0.2222 (!)
+                29      10    0.7000    0.3000 (!)
+                30       4    1.0000    0.2500 (!)
+                31       7    0.5714    0.2857 (!)
+                32       6    1.0000    0.3333 (!)
+                33       5    1.0000    0.2000 (!)
+                34       4    0.7500    0.2500 (!)
+                35       5    0.8000    0.2000 (!)
+                36       6    0.8333    0.3333 (!)
+                37       8    0.5000    0.2500 (!)
+                38       3    0.6667    0.3333 (!)
+                39       2    0.5000    0.5000 (!)
+                40       7    0.8571    0.2857 (!)
+                41       4    0.7500    0.2500 (!)
+                42       6    0.8333    0.3333 (!)
+                43       4    0.5000    0.2500 (!)
+                44       2    1.0000    0.5000 (!)
+                45       3    0.6667    0.3333 (!)
+                46       1    1.0000    0.0000 (!)
+                47       5    1.0000    0.2000 (!)
+                48       4    1.0000    0.2500 (!)
+                49       3    0.6667    0.3333 (!)
+                50       3    1.0000    0.3333 (!)
+                51       2    1.0000    0.5000 (!)
+                52       1    1.0000    0.0000 (!)
+                53       2    1.0000    0.5000 (!)
+                54       3    0.3333    0.3333 (!)
+                55       1    1.0000    0.0000 (!)
+                56       1    1.0000    0.0000 (!)
+                57       2    0.5000    0.5000 (!)
+                58       1    1.0000    0.0000 (!)
+                59       1    1.0000    0.0000 (!)
+                60       2    1.0000    0.5000 (!)
+                61       2    0.5000    0.5000 (!)
+                63       4    0.7500    0.2500 (!)
+                64       2    0.5000    0.5000 (!)
+                67       1    1.0000    0.0000 (!)
+                68       2    1.0000    0.5000 (!)
+                74       1    1.0000    0.0000 (!)
+                75       1    1.0000    0.0000 (!)
+------------------------------------------------
+  (!) n<50: 20(n=2), 21(n=4), 22(n=4), 23(n=17), 24(n=12), 25(n=5), 26(n=11), 27(n=5), 28(n=9), 29(n=10), 30(n=4), 31(n=7), 32(n=6), 33(n=5), 34(n=4), 35(n=5), 36(n=6), 37(n=8), 38(n=3), 39(n=2), 40(n=7), 41(n=4), 42(n=6), 43(n=4), 44(n=2), 45(n=3), 46(n=1), 47(n=5), 48(n=4), 49(n=3), 50(n=3), 51(n=2), 52(n=1), 53(n=2), 54(n=3), 55(n=1), 56(n=1), 57(n=2), 58(n=1), 59(n=1), 60(n=2), 61(n=2), 63(n=4), 64(n=2), 67(n=1), 68(n=2), 74(n=1), 75(n=1)
+  Too few large groups for fairness comparison.
+  Calibrated accuracy: 0.7600 (was 0.7050, Δ=+0.0550)
+Training time: 0.424s
+{ feature: 0 [ left child: { feature: 14 [ left child: { feature: 54 [ left child: { feature: 42 [ left child: { feature: 32 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 22 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 46 [ left child: { feature: 7 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }] }] }, right child: { feature: 1 [ left child: { feature: 53 [ left child: { feature: 29 [ left child: { feature: 13 [ left child: { feature: 17 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 14 [ left child: { feature: 26 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 6 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 33 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 42 [ left child: { feature: 16 [ left child: { feature: 7 [ left child: { prediction: 0, loss: 0.06666666666666665 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }] }] }] }, right child: { feature: 22 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 7 [ left child: { feature: 12 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }] }] }] }, right child: { feature: 20 [ left child: { feature: 44 [ left child: { feature: 24 [ left child: { feature: 12 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 8 [ left child: { feature: 2 [ left child: { feature: 32 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 7 [ left child: { feature: 16 [ left child: { feature: 14 [ left child: { prediction: 0, loss: 0.031249999999999997 }, right child: { prediction: 0, loss: 0.015625 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }] }, right child: { feature: 40 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 33 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 25 [ left child: { feature: 12 [ left child: { prediction: 0, loss: 0.012195121951219511 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 13 [ left child: { prediction: 0, loss: 0.024390243902439025 }, right child: { prediction: 0, loss: 0.08536585365853659 }] }] }] }] }] }, right child: { feature: 10 [ left child: { feature: 45 [ left child: { feature: 22 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 27 [ left child: { feature: 15 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { feature: 21 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 2 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.18181818181818182 }] }] }] }] }, right child: { prediction: 1, loss: 0.0 }] }] }] }, right child: { feature: 36 [ left child: { feature: 2 [ left child: { feature: 7 [ left child: { feature: 55 [ left child: { feature: 45 [ left child: { feature: 26 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 5 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 0, loss: 0.026315789473684206 }] }] }, right child: { prediction: 1, loss: 0.0 }] }, right child: { feature: 43 [ left child: { feature: 26 [ left child: { feature: 13 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 5 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 15 [ left child: { prediction: 1, loss: 0.10526315789473685 }, right child: { prediction: 1, loss: 0.0 }] }] }] }] }, right child: { feature: 43 [ left child: { feature: 18 [ left child: { feature: 12 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 9 [ left child: { feature: 21 [ left child: { prediction: 1, loss: 0.0 }, right child: { feature: 13 [ left child: { prediction: 0, loss: 0.043478260869565216 }, right child: { prediction: 0, loss: 0.06521739130434782 }] }] }, right child: { prediction: 1, loss: 0.0 }] }] }] }, right child: { feature: 10 [ left child: { feature: 4 [ left child: { feature: 27 [ left child: { feature: 9 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 3 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.005714285714285715 }] }] }, right child: { feature: 17 [ left child: { feature: 12 [ left child: { prediction: 1, loss: 0.09142857142857143 }, right child: { prediction: 1, loss: 0.05142857142857143 }] }, right child: { feature: 9 [ left child: { prediction: 0, loss: 0.17714285714285713 }, right child: { prediction: 1, loss: 0.0 }] }] }] }, right child: { feature: 44 [ left child: { feature: 16 [ left child: { feature: 14 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 0, loss: 0.005714285714285715 }] }, right child: { prediction: 1, loss: 0.0 }] }, right child: { prediction: 1, loss: 0.0 }] }] }, right child: { prediction: 1, loss: 0.0 }] }] }, right child: { feature: 7 [ left child: { feature: 12 [ left child: { feature: 23 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 5 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }] }, right child: { feature: 39 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 33 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }] }] }, right child: { feature: 3 [ left child: { feature: 48 [ left child: { feature: 41 [ left child: { feature: 8 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 1, loss: 0.0 }] }, right child: { feature: 23 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 14 [ left child: { prediction: 0, loss: 0.025316455696202535 }, right child: { prediction: 0, loss: 0.0 }] }] }] }, right child: { feature: 29 [ left child: { feature: 14 [ left child: { feature: 8 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.012658227848101266 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { feature: 25 [ left child: { prediction: 0, loss: 0.0 }, right child: { feature: 16 [ left child: { prediction: 0, loss: 0.0379746835443038 }, right child: { prediction: 0, loss: 0.05063291139240506 }] }] }] }] }, right child: { feature: 23 [ left child: { feature: 40 [ left child: { feature: 17 [ left child: { prediction: 1, loss: 0.0 }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 1, loss: 0.0 }] }, right child: { feature: 15 [ left child: { feature: 8 [ left child: { feature: 4 [ left child: { prediction: 0, loss: 0.0 }, right child: { prediction: 0, loss: 0.035714285714285705 }] }, right child: { prediction: 0, loss: 0.0 }] }, right child: { prediction: 1, loss: 0.0 }] }] }] }] }] }] }] }] }
