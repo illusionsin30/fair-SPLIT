@@ -2,105 +2,84 @@
 # Dataset loading — SPLIT paper (ICML 2025 Oral) benchmarks
 # ============================================================
 #
-# UCI datasets are loaded via ucimlrepo.  Kaggle datasets use
-# kagglehub with the same fallback strategy as COMPAS.
+# All UCI-origin datasets are loaded via sklearn.datasets.fetch_openml,
+# which returns clean DataFrames with proper column names and dtypes.
+# Kaggle datasets use kagglehub with CLI fallback.
 #
 # Each loader returns:  X, y, numeric_features, categorical_features
 # ============================================================
 import os
+import re
 import subprocess
-import sys
 
 import numpy as np
 import pandas as pd
 
 
 # ====================================================================
-# UCI helper
+# sklearn OpenML helper
 # ====================================================================
 
-def _fetch_uci(dataset_id, num_feats=None, cat_feats=None):
-    """Load a dataset from the UCI ML Repository via ucimlrepo.
+_OPENML_CACHE = {}
+
+def _fetch_openml(name, version="active", target_col=None, drop_cols=None):
+    """Load a dataset from OpenML via sklearn, with caching.
 
     Args:
-        dataset_id: UCI dataset ID (e.g. 2 for Adult).
-        num_feats: Explicit list of numeric feature names.  If None,
-                   auto-detected via dtypes.
-        cat_feats: Explicit list of categorical feature names.
+        name: OpenML dataset name (e.g. "adult").
+        version: Dataset version (default "active" = latest).
+        target_col: Column name to use as target.  If None, auto-detected
+                    from the returned frame's target attribute.
+        drop_cols: Columns to drop from X (e.g. identifiers / leaky cols).
 
     Returns:
         X (DataFrame), y (ndarray), num_feats (list), cat_feats (list).
-
-    Raises
-    ------
-    ImportError if ucimlrepo is not installed.
     """
-    try:
-        from ucimlrepo import fetch_ucirepo
-    except ImportError:
-        raise ImportError(
-            "ucimlrepo is required for UCI datasets. "
-            "Install with:  pip install ucimlrepo"
-        )
+    from sklearn.datasets import fetch_openml
 
-    dataset = fetch_ucirepo(id=dataset_id)
-    X = dataset.data.features.copy()
-    y = dataset.data.targets
+    cache_key = (name, version)
+    if cache_key not in _OPENML_CACHE:
+        print(f"  [OpenML] Loading {name} (version={version}) ...")
+        bunch = fetch_openml(name=name, version=version, parser="auto",
+                             as_frame=True)
+        _OPENML_CACHE[cache_key] = bunch
 
-    # Targets may be a DataFrame or Series
-    if isinstance(y, pd.DataFrame):
-        y = y.iloc[:, 0]
+    bunch = _OPENML_CACHE[cache_key]
+    X = bunch.data.copy()
+    y_raw = bunch.target
 
-    # Determine feature type lists
-    if num_feats is None and cat_feats is None:
-        num_feats = list(X.select_dtypes(include=[np.number]).columns)
-        cat_feats = list(X.select_dtypes(exclude=[np.number]).columns)
-    else:
-        num_matched = [c for c in (num_feats or []) if c in X.columns]
-        cat_matched = [c for c in (cat_feats or []) if c in X.columns]
-        num_missed = [c for c in (num_feats or []) if c not in X.columns]
-        cat_missed = [c for c in (cat_feats or []) if c not in X.columns]
-        if num_missed or cat_missed:
-            print(f"  WARNING: feature name mismatch!")
-            if num_missed:
-                print(f"    Numeric not found: {num_missed}")
-            if cat_missed:
-                print(f"    Categorical not found: {cat_missed}")
-            print(f"    Available columns: {list(X.columns)}")
-        num_feats = num_matched
-        cat_feats = cat_matched
-        # Route unmatched columns by dtype, not blindly to numeric
-        used = set(num_feats) | set(cat_feats)
-        extra_num = []
-        extra_cat = []
-        for c in X.columns:
-            if c not in used:
-                if pd.api.types.is_numeric_dtype(X[c]):
-                    extra_num.append(c)
-                else:
-                    extra_cat.append(c)
-        if extra_num:
-            print(f"  Unmatched numeric: {extra_num}")
-        if extra_cat:
-            print(f"  Unmatched categorical: {extra_cat}")
-        num_feats = num_feats + extra_num
-        cat_feats = cat_feats + extra_cat
+    # Determine target column
+    if target_col is not None and target_col in X.columns:
+        y_raw = X.pop(target_col)
+    elif isinstance(y_raw, pd.DataFrame):
+        y_raw = y_raw.iloc[:, 0]
+    elif y_raw.name is not None and y_raw.name in X.columns:
+        X = X.drop(columns=[y_raw.name])
+    y = np.asarray(y_raw)
+
+    # Drop explicitly requested columns
+    if drop_cols:
+        X = X.drop(columns=[c for c in drop_cols if c in X.columns],
+                   errors="ignore")
+
+    # Separate numeric vs categorical by dtype
+    num_feats = list(X.select_dtypes(include=[np.number]).columns)
+    cat_feats = list(X.select_dtypes(exclude=[np.number]).columns)
 
     # Drop rows with missing values
     n_before = len(X)
-    y = y.loc[X.index]
-    valid = X.notna().all(axis=1) & y.notna()
+    valid = X.notna().all(axis=1) & pd.notna(y)
     X = X.loc[valid].reset_index(drop=True)
-    y = y.loc[valid].reset_index(drop=True)
+    y = y[valid]
     if len(X) < n_before:
         print(f"  Dropped {n_before - len(X)} rows with missing values.")
 
     print(f"  Shape: {X.shape}  |  Classes: {sorted(np.unique(y))}")
-    return X, y.values, num_feats, cat_feats
+    return X, y, num_feats, cat_feats
 
 
 # ====================================================================
-# Kaggle helper  (shared with COMPAS)
+# Kaggle helper
 # ====================================================================
 
 _KAGGLEHUB_AVAILABLE = None
@@ -119,11 +98,8 @@ def _check_kagglehub():
 def _download_kaggle_dataset(dataset_slug, filename, local_dir, env_var):
     """Download a Kaggle dataset, with local-cache and fallback.
 
-    Args:
-        dataset_slug: e.g. "danofer/compass".
-        filename: Name of the CSV file to locate.
-        local_dir: Subdirectory under data/ for the CLI fallback.
-        env_var: Environment variable for a manual local path override.
+    Supports fuzzy filename matching to handle Kaggle's duplicate-file
+    renaming (e.g. "file.csv" → "file (1).csv").
 
     Returns:
         Absolute path to the CSV file.
@@ -134,29 +110,41 @@ def _download_kaggle_dataset(dataset_slug, filename, local_dir, env_var):
         print(f"Found local data via ${env_var}: {env_path}")
         return env_path
 
-    # 2. Kagglehub cache
+    base_no_ext = os.path.splitext(filename)[0]
+
+    # 2. Kagglehub cache (fuzzy)
     cache_base = os.path.expanduser("~/.cache/kagglehub/datasets")
     dataset_cache = os.path.join(
-        cache_base, dataset_slug.replace("/", os.sep)
-    )
+        cache_base, dataset_slug.replace("/", os.sep))
     if os.path.isdir(dataset_cache):
         for root, _dirs, files in os.walk(dataset_cache):
-            if filename in files:
-                return os.path.join(root, filename)
+            for f in files:
+                if f == filename or f.startswith(base_no_ext):
+                    found = os.path.join(root, f)
+                    print(f"Found in kagglehub cache: {found}")
+                    return found
 
-    # 3. Local project directory
-    local = os.path.join("data", local_dir, filename)
-    if os.path.isfile(local):
-        print(f"Found local data: {local}")
-        return local
+    # 3. Local project directory (fuzzy)
+    local_dir_path = os.path.join("data", local_dir)
+    if os.path.isdir(local_dir_path):
+        for f in os.listdir(local_dir_path):
+            if f == filename or f.startswith(base_no_ext):
+                found = os.path.join(local_dir_path, f)
+                if os.path.isfile(found):
+                    print(f"Found local data: {found}")
+                    return found
 
     # 4. kagglehub download
     if _check_kagglehub():
         try:
             import kagglehub
             path = kagglehub.dataset_download(dataset_slug)
-            print(f"Downloaded to: {path}")
-            return os.path.join(path, filename)
+            print(f"kagglehub downloaded to: {path}")
+            for root, _dirs, files in os.walk(path):
+                for f in files:
+                    if f == filename or f.startswith(base_no_ext):
+                        print(f"  Found {f} at {root}")
+                        return os.path.join(root, f)
         except Exception as exc:
             print(f"[WARN] kagglehub download failed: {exc}")
 
@@ -165,11 +153,15 @@ def _download_kaggle_dataset(dataset_slug, filename, local_dir, env_var):
     try:
         os.makedirs(target, exist_ok=True)
         subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "download",
+            ["kaggle", "datasets", "download",
              dataset_slug, "-p", target, "--unzip"],
             check=True,
         )
-        return os.path.join(target, filename)
+        for root, _dirs, files in os.walk(target):
+            for f in files:
+                if f == filename or f.startswith(base_no_ext):
+                    print(f"Kaggle CLI downloaded to: {root}")
+                    return os.path.join(root, f)
     except Exception as exc:
         print(f"[WARN] kaggle CLI download failed: {exc}")
 
@@ -183,165 +175,181 @@ def _download_kaggle_dataset(dataset_slug, filename, local_dir, env_var):
 
 
 # ====================================================================
-# Individual dataset loaders
+# Individual dataset loaders  (all UCI → sklearn.fetch_openml)
 # ====================================================================
 
-# ---------- Adult (UCI #2) ----------
-ADULT_NUMERIC = [
-    "age", "fnlwgt", "education-num", "capital-gain", "capital-loss",
-    "hours-per-week",
-]
-ADULT_CATEGORICAL = [
-    "workclass", "education", "marital-status", "occupation",
-    "relationship", "race", "sex", "native-country",
-]
-
-
+# ---------- Adult ----------
 def load_adult_data():
-    """Adult / Census Income dataset — binary classification.
-
-    Predict whether income exceeds $50K/yr.
-    """
-    print("[Adult] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(2, num_feats=ADULT_NUMERIC,
-                                cat_feats=ADULT_CATEGORICAL)
-
-    # Clean target: strip trailing dots and whitespace (UCI Adult quirk)
+    """Adult / Census Income — binary classification (>50K/yr)."""
+    print("[Adult] Loading via sklearn (OpenML #1590) ...")
+    X, y, num, cat = _fetch_openml("adult", version=2)
+    # Clean target: "<=50K" / "<=50K." / ">50K" / ">50K." → 0/1
     if y.dtype.kind in ("U", "S", "O"):
         y = np.array([str(v).strip().rstrip(".") for v in y])
-        # Binarize: <=50K → 0, >50K → 1
         y = (y == ">50K").astype(int)
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
-
     return X, y, num, cat
 
 
-# ---------- Bike (UCI #275) ----------
-BIKE_NUMERIC = ["temp", "atemp", "hum", "windspeed", "casual", "registered"]
-BIKE_CATEGORICAL = [
-    "season", "yr", "mnth", "hr", "holiday", "weekday",
-    "workingday", "weathersit",
-]
-BIKE_DROP = ["instant", "dteday"]
-
-
+# ---------- Bike Sharing ----------
 def load_bike_data():
-    """Bike Sharing dataset — regression (cnt).
-
-    Predict hourly bike rental count.
-    """
-    print("[Bike] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(275, num_feats=BIKE_NUMERIC,
-                                cat_feats=BIKE_CATEGORICAL)
-
-    # ucimlrepo returns targets as a 3-col DataFrame (casual, registered, cnt).
-    # Pick 'cnt' as the target.
-    if hasattr(y, 'ndim') and y.ndim == 2:
-        y = y[:, 2] if y.shape[1] == 3 else y[:, -1]
-
-    # Drop 'instant' and 'dteday' (non-predictive identifiers).
-    drop_cols = [c for c in BIKE_DROP if c in X.columns]
-    X = X.drop(columns=drop_cols, errors="ignore")
-    num = [c for c in num if c in X.columns]
-    cat = [c for c in cat if c in X.columns]
-
+    """Bike Sharing — regression (cnt)."""
+    print("[Bike] Loading via sklearn (OpenML #42712) ...")
+    X, y, num, cat = _fetch_openml("Bike_Sharing_Demand", version=2,
+                                   target_col="cnt",
+                                   drop_cols=["dteday", "Unnamed: 0"])
     print(f"  Target (cnt): mean={y.mean():.1f}, std={y.std():.1f}")
     return X, y, num, cat
 
 
-# ---------- Spambase (UCI #94) ----------
-SPAMBASE_NUMERIC = [f"word_freq_{i}" for i in range(48)] + \
-                   [f"char_freq_{i}" for i in range(6)] + \
-                   ["capital_run_length_average",
-                    "capital_run_length_longest",
-                    "capital_run_length_total"]
-
-
+# ---------- Spambase ----------
 def load_spambase_data():
-    """Spambase — binary classification (spam / not-spam).
-
-    All 57 features are numeric (word/char frequencies).
-    """
-    print("[Spambase] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(94)
-
-    # All features are numeric; target is already 0/1
+    """Spambase — binary classification."""
+    print("[Spambase] Loading via sklearn (OpenML #44) ...")
+    X, y, num, cat = _fetch_openml("spambase", version=1)
     y = y.astype(int)
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
     return X, y, num, cat
 
 
-# ---------- Bank Marketing (UCI #222) ----------
-BANK_NUMERIC = ["age", "balance", "day", "duration", "campaign",
-                "pdays", "previous"]
-BANK_CATEGORICAL = ["job", "marital", "education", "default", "housing",
-                    "loan", "contact", "month", "poutcome"]
-
-
+# ---------- Bank Marketing ----------
 def load_bank_data():
-    """Bank Marketing — binary classification.
-
-    Predict whether a client subscribes a term deposit.
-    """
-    print("[Bank] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(222, num_feats=BANK_NUMERIC,
-                                cat_feats=BANK_CATEGORICAL)
-
-    # Target 'y' → 0/1
-    if y.dtype.kind in ("U", "S", "O"):
-        y = (y == "yes").astype(int)
+    """Bank Marketing — binary classification (term deposit)."""
+    print("[Bank] Loading via sklearn (OpenML #1461) ...")
+    X, y, num, cat = _fetch_openml("bank-marketing", version=2)
+    # OpenML encodes target as '1'/'2'  →  0/1
+    y = (y.astype(int) - 1).astype(int)
+    # OpenML returns columns as V1, V2, ... — rename to human-readable
+    _bank_names = [
+        "age", "job", "marital", "education", "default", "balance",
+        "housing", "loan", "contact", "day", "month", "duration",
+        "campaign", "pdays", "previous", "poutcome",
+    ]
+    # Use regex to detect V1..V16 naming pattern (more robust than set equality)
+    if all(re.fullmatch(r"V\d+", col) for col in X.columns) and len(X.columns) == len(_bank_names):
+        rename = dict(zip([f"V{i}" for i in range(1, len(_bank_names) + 1)], _bank_names))
+        X = X.rename(columns=rename)
+        num = ["age", "balance", "day", "duration", "campaign", "pdays", "previous"]
+        cat = ["job", "marital", "education", "default", "housing", "loan",
+               "contact", "month", "poutcome"]
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
     return X, y, num, cat
 
 
-# ---------- Covertype (UCI #31) ----------
-COVERTYPE_NUMERIC = [
-    "Elevation", "Aspect", "Slope",
-    "Horizontal_Distance_To_Hydrology",
-    "Vertical_Distance_To_Hydrology",
-    "Horizontal_Distance_To_Roadways",
-    "Hillshade_9am", "Hillshade_Noon", "Hillshade_3pm",
-    "Horizontal_Distance_To_Fire_Points",
-]
-# Wilderness areas and soil types are binary indicators —
-# we keep them as numeric since they're already 0/1.
-COVERTYPE_TARGET = "Cover_Type"
-
-
+# ---------- Covertype ----------
 def load_covertype_data():
-    """Covertype — 7-class classification.
-
-    Predict forest cover type from cartographic variables.
-    The 44 wilderness/soil-type binary columns are treated as numeric.
-    """
-    print("[Covertype] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(31)
-
-    # Remap cover type from 1..7 → 0..6
-    y = y.astype(int) - 1
+    """Covertype — 7-class classification."""
+    print("[Covertype] Loading via sklearn (OpenML #1596) ...")
+    X, y, num, cat = _fetch_openml("covertype", version=3)
+    y = y.astype(int) - 1  # 1..7 → 0..6
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
     return X, y, num, cat
 
 
-# ---------- Thyroid Disease (UCI #102) ----------
-
+# ---------- Thyroid Disease ----------
 def load_thyroid_data():
-    """Thyroid Disease — 3-class (or more) classification.
+    """Thyroid Disease — binary classification (sick vs negative).
 
-    The UCI thyroid dataset has been widely used in decision-tree papers.
-    We select the 'ann-train' variant (the full 21-feature set).
+    OpenML data_id=40701 returns labels '0' (healthy) / '1' (sick).
     """
-    print("[Thyroid] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(102)
+    print("[Thyroid] Loading via sklearn (OpenML #40701) ...")
+    from sklearn.datasets import fetch_openml
+    data = fetch_openml(data_id=40701, parser="auto", as_frame=True)
+    X = data.data
+    y = data.target.astype(int).values
+    num_feats = list(X.select_dtypes(include=[np.number]).columns)
+    cat_feats = list(X.select_dtypes(exclude=[np.number]).columns)
+    print(f"  Shape: {X.shape}  |  Classes: {sorted(np.unique(y))}")
+    print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
+    return X, y, num_feats, cat_feats
 
-    if y.dtype.kind in ("U", "S", "O"):
-        # Map string labels to 0..K-1
-        unique_labels = sorted(np.unique(y))
-        mapping = {lab: i for i, lab in enumerate(unique_labels)}
-        print(f"  Label mapping: {mapping}")
-        y = np.array([mapping[v] for v in y])
 
-    y = y.astype(int)
+# ---------- German Credit ----------
+def load_german_credit_data():
+    """German Credit (Statlog) — binary classification.
+
+    Fairness attributes: personal_status, age (openml col names).
+    """
+    print("[German Credit] Loading via sklearn (OpenML #31) ...")
+    X, y, num, cat = _fetch_openml("credit-g", version=2)
+    y = (y == "bad").astype(int)  # good/bad → 0/1
+    print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
+    return X, y, num, cat
+
+
+# ---------- Communities and Crime ----------
+def load_communities_data():
+    """Communities and Crime — binary (high/low violent crime).
+
+    OpenML v1 returns numeric column names (0-146).  The last column is
+    ViolentCrimesPerPop (continuous target).  First 2 columns are state/county.
+    """
+    print("[Communities & Crime] Loading via sklearn (OpenML name='communities-and-crime', v=1) ...")
+    from sklearn.datasets import fetch_openml
+    data = fetch_openml(name="communities-and-crime", version=1,
+                        parser="auto", as_frame=True)
+    X = data.data
+    # Cols 0, 1 are state/county names — discard them first
+    X = X.iloc[:, 2:]
+    # Column names are strings '2'..'146'; many are stored as object but are
+    # actually numeric.  Coerce each column individually.
+    for col in X.columns:
+        if X[col].dtype.kind == "O":
+            X[col] = pd.to_numeric(X[col], errors="coerce")
+    y = X.pop(X.columns[-1]).values  # last col = ViolentCrimesPerPop
+    X.columns = [f"feat_{i}" for i in range(X.shape[1])]
+
+    # Drop rows with NaN target
+    valid = ~np.isnan(y)
+    X = X.loc[valid].reset_index(drop=True)
+    y = y[valid]
+
+    # Handle NaN in features: drop columns with >50% missing, median-fill rest
+    nan_frac = X.isna().mean()
+    drop_cols = list(nan_frac[nan_frac > 0.5].index)
+    if drop_cols:
+        X = X.drop(columns=drop_cols)
+        print(f"  Dropped {len(drop_cols)} features with >50% missing values.")
+    fill_cols = X.isna().any()
+    for col in X.columns[fill_cols]:
+        med = X[col].median()
+        X[col] = X[col].fillna(med)
+    if fill_cols.any():
+        print(f"  Median-filled {fill_cols.sum()} features with <50% missing.")
+
+    # Binarize at median
+    threshold = float(np.median(y))
+    print(f"  Binarizing violent-crime rate at median = {threshold:.4f}")
+    y = (y >= threshold).astype(int)
+
+    non_num = X.select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_num:
+        X = X.drop(columns=non_num)
+        print(f"  Dropped non-numeric columns: {non_num}")
+    num = list(X.columns)
+    cat = []
+    print(f"  Shape: {X.shape}")
+    print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
+    return X, y, num, cat
+
+
+# ---------- Heart Disease ----------
+def load_heart_data():
+    """Heart Disease (Cleveland) — binary classification.
+
+    OpenML v1 embeds the target column ('target') inside X.
+    """
+    print("[Heart Disease] Loading via sklearn (OpenML name='heart-disease', v=1) ...")
+    from sklearn.datasets import fetch_openml
+    data = fetch_openml(name="heart-disease", version=1, parser="auto",
+                        as_frame=True)
+    X = data.data
+    # 'target' is the last column in X; pop it out
+    y = X.pop("target").values
+    y = (y.astype(int) > 0).astype(int)
+    num = list(X.select_dtypes(include=[np.number]).columns)
+    cat = list(X.select_dtypes(exclude=[np.number]).columns)
+    print(f"  Shape: {X.shape}  |  Classes: {sorted(np.unique(y))}")
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
     return X, y, num, cat
 
@@ -379,10 +387,7 @@ def load_compass_data():
 # ---------- HELOC (Kaggle) ----------
 
 def load_heloc_data():
-    """HELOC (Home Equity Line of Credit) — binary classification.
-
-    Predict RiskPerformance (Good/Bad).
-    """
+    """HELOC — binary classification (RiskPerformance Good/Bad)."""
     csv_path = _download_kaggle_dataset(
         "averkiyoliabev/home-equity-line-of-creditheloc",
         "heloc_dataset_v1.csv", "heloc", "HELOC_DATA_PATH",
@@ -394,11 +399,10 @@ def load_heloc_data():
     y = (df[target] == "Bad").astype(int).values
     X = df.drop(columns=[target])
 
-    # All features are numeric in HELOC
     num_feats = list(X.columns)
     cat_feats = []
 
-    # Drop rows with special negative values (HEOC encoding for missing)
+    # HELOC encodes missing as -9, -8, -7
     X = X.replace(-9, np.nan).replace(-8, np.nan).replace(-7, np.nan)
     valid = X.notna().all(axis=1)
     X = X.loc[valid].reset_index(drop=True)
@@ -408,128 +412,36 @@ def load_heloc_data():
     return X, y, num_feats, cat_feats
 
 
-# ---------- German Credit (UCI #144) ----------
-# ucimlrepo returns columns as Attribute1...Attribute20.
-# 1:Checking account  2:Duration  3:Credit history  4:Purpose
-# 5:Credit amount  6:Savings  7:Employment since  8:Installment rate
-# 9:Personal status & sex  10:Other debtors  11:Residence since
-# 12:Property  13:Age  14:Other installments  15:Housing
-# 16:Existing credits  17:Job  18:Liable people  19:Telephone
-# 20:Foreign worker
-GERMAN_NUMERIC = [
-    "Attribute2", "Attribute5", "Attribute8", "Attribute11",
-    "Attribute13", "Attribute16", "Attribute18",
-]
-GERMAN_CATEGORICAL = [
-    "Attribute1", "Attribute3", "Attribute4", "Attribute6",
-    "Attribute7", "Attribute9", "Attribute10", "Attribute12",
-    "Attribute14", "Attribute15", "Attribute17", "Attribute19",
-    "Attribute20",
-]
-GERMAN_TARGET = None  # last column = credit risk
-
-
-def load_german_credit_data():
-    """German Credit (Statlog) — binary classification.
-
-    Predict credit risk (good / bad).  Widely used in fairness research
-    with 'Personal status and sex' (gender) and 'Age' as sensitive attributes.
-    """
-    print("[German Credit] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(144, num_feats=GERMAN_NUMERIC,
-                                cat_feats=GERMAN_CATEGORICAL)
-    y = y.astype(int) - 1  # labels are 1/2 → 0/1
-    print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
-    return X, y, num, cat
-
-
-# ---------- Communities and Crime (UCI #183) ----------
-_COMMUNITIES_DROP = [
-    "state", "county", "community", "communityname", "fold",
-]
-
-
-def load_communities_data():
-    """Communities and Crime — binary classification (high / low violent crime).
-
-    Predict whether the per-capita violent crime rate is above the median.
-    Commonly used in fairness research with 'racepctblack' as sensitive attribute.
-    """
-    print("[Communities & Crime] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(183)
-
-    # The target column from ucimlrepo may be 'ViolentCrimesPerPop'.
-    # Binarize at median.
-    threshold = float(np.median(y))
-    print(f"  Binarizing violent-crime rate at median = {threshold:.4f}")
-    y = (y >= threshold).astype(int)
-
-    # Drop non-predictive string columns
-    drop = [c for c in _COMMUNITIES_DROP if c in X.columns]
-    X = X.drop(columns=drop, errors="ignore")
-    num = [c for c in num if c in X.columns]
-    cat = [c for c in cat if c in X.columns]
-
-    # Drop any remaining non-numeric columns that couldn't be parsed
-    non_num = X.select_dtypes(exclude=[np.number]).columns.tolist()
-    if non_num:
-        X = X.drop(columns=non_num)
-        cat = [c for c in cat if c in X.columns]
-        print(f"  Dropped non-numeric columns: {non_num}")
-
-    print(f"  Shape: {X.shape}  |  Class balance:")
-    print(pd.Series(y).value_counts(normalize=True))
-    return X, y, num, cat
-
-
-# ---------- Heart Disease (UCI #45) ----------
-
-def load_heart_data():
-    """Heart Disease (Cleveland) — binary classification.
-
-    Predict presence of heart disease.  Features include age, sex, chest
-    pain type, cholesterol, etc.
-    """
-    print("[Heart Disease] Loading from UCI repository...")
-    X, y, num, cat = _fetch_uci(45)
-
-    # Target values > 0 indicate disease → binary
-    y = (y > 0).astype(int)
-    print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
-    return X, y, num, cat
-
-
 # ---------- Law School Admissions (Kaggle) ----------
-_LAW_SCHOOL_FILENAME = "law_school_clean.csv"
+_LAW_SCHOOL_FILENAME = "bar_pass_prediction.csv"
 _LAW_SCHOOL_DATASET = "danofer/law-school-admissions-bar-passage"
 
 
 def load_law_school_data():
     """Law School Admissions — binary classification (bar passage).
-
-    Predict whether a law student passes the bar exam.
-    Sensitive attributes: race, gender.
-    Source: Kaggle (danofer/law-school-admissions-bar-passage)
+    Sensitive: race, gender.
     """
-    print("[Law School] Loading from Kaggle...")
+    print("[Law School] Loading from local CSV...")
     csv_path = _download_kaggle_dataset(
         _LAW_SCHOOL_DATASET, _LAW_SCHOOL_FILENAME,
         "law_school", "LAW_SCHOOL_DATA_PATH",
     )
-
     df = pd.read_csv(csv_path)
     print(f"  Raw shape: {df.shape}")
 
     target = "pass_bar"
-    sensitive = ["race", "gender"]
-    drop_cols = ["admit", "bar1", "bar2", "bar_passed"]  # leaky columns
+    drop_cols = ["bar1", "bar1_yr", "bar2", "bar2_yr", "bar_passed", "bar",
+                 "ID", "dnn_bar_pass_prediction"]
 
     y = df[target].astype(int).values
     X = df.drop(columns=[target] + [c for c in drop_cols if c in df.columns],
                 errors="ignore")
 
-    num_feats = X.select_dtypes(include=[np.number]).columns.tolist()
-    cat_feats = X.select_dtypes(exclude=[np.number]).columns.tolist()
+    # Decode race from numeric to readable labels for fairness evaluation
+    if "race" in X.columns:
+        race_map = {1: "white", 2: "black", 3: "hispanic", 4: "asian",
+                    5: "other", 6: "other", 7: "other"}
+        X["race"] = X["race"].map(race_map).fillna("other")
 
     # Drop rows with missing values
     valid = X.notna().all(axis=1)
@@ -537,19 +449,20 @@ def load_law_school_data():
     y = y[valid.values]
     print(f"  Cleaned shape: {X.shape}")
     print("  Class balance:\n", pd.Series(y).value_counts(normalize=True))
-    print(f"  Sensitive attributes: {[s for s in sensitive if s in X.columns]}")
+    print(f"  Sensitive attributes: race, gender")
+
+    num_feats = list(X.select_dtypes(include=[np.number]).columns)
+    cat_feats = list(X.select_dtypes(exclude=[np.number]).columns)
     return X, y, num_feats, cat_feats
 
 
 # ---------- ACS Income (folktables) ----------
 
 def load_acs_income_data():
-    """ACS Income — binary classification (income > $50K).
+    """ACS Income (2018 CA) — binary classification (>$50K).
 
-    American Community Survey data, a modern and larger alternative to Adult.
     Requires: pip install folktables
-
-    Sensitive attributes: race, sex, age.
+    Sensitive: SEX, RAC1P.
     """
     import importlib
     spec = importlib.util.find_spec("folktables")
@@ -566,15 +479,11 @@ def load_acs_income_data():
                                 survey="person")
     acs_data = data_source.get_data(states=["CA"], download=True)
 
-    # Use the ACSIncome task definition from folktables
     features, labels, _group = ACSIncome.df_to_numpy(acs_data)
-
-    # Build a clean DataFrame
     feature_names = ACSIncome.features
     X = pd.DataFrame(features, columns=feature_names)
     y = labels.astype(int)
 
-    # All ACSIncome features are numeric
     num_feats = list(X.columns)
     cat_feats = []
 
@@ -590,19 +499,13 @@ def load_acs_income_data():
 def load_iris_data():
     """Iris — 3-class classification."""
     from sklearn.datasets import load_iris
-
     iris = load_iris(as_frame=True)
-    X = iris.data
-    y = iris.target.values
-    return X, y, list(X.columns), []
+    return iris.data, iris.target.values, list(iris.data.columns), []
 
 
 # ---------- Diabetes (sklearn) ----------
 def load_diabetes_data():
     """Diabetes — regression."""
     from sklearn.datasets import load_diabetes
-
     diab = load_diabetes(as_frame=True)
-    X = diab.data
-    y = diab.target.values
-    return X, y, list(X.columns), []
+    return diab.data, diab.target.values, list(diab.data.columns), []

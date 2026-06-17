@@ -25,3 +25,11 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# test and results
+tests/
+results/
+
+# assistants
+.claude/
+.codex/

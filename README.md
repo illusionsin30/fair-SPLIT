@@ -203,6 +203,36 @@ Each log contains the model parameters, test accuracy, majority baseline,
 the list of features used for splits, per-group fairness metrics, and the
 full tree structure.
 
+## Multi-seed experiments
+
+For one experiment across several seeds:
+
+```bash
+python scripts/run_multi_seed.py \
+  --seeds 0,1,2,3,4 \
+  --run_name cart-adult-d5 \
+  -- \
+  --model cart --dataset adult --max_depth 5
+```
+
+For the full evaluation grid across several seeds:
+
+```bash
+python scripts/eval_multi_seed.py \
+  --seeds 0,1,2,3,4 \
+  --run_name full-eval-5seeds
+```
+
+Each multi-seed run writes:
+
+- `per_seed.json`: parsed metrics for every completed seed.
+- `summary.json`: recursive mean/std/n for every numeric metric.
+- `summary.csv`: flattened metrics with columns `model,dataset,mode,metric,mean,std,n`.
+- `logs/`: seed-specific training logs.
+
+Standard deviation is the sample standard deviation when at least two seeds
+complete, and `0.0` for a single completed seed.
+
 ## Project structure
 
 ```

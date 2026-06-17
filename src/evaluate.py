@@ -65,6 +65,21 @@ def evaluate_fairness(y_true, y_pred, sensitive, name="sensitive"):
         print(f"  [Fairness] {name}: only 1 group — fairness N/A")
         return
 
+    # Auto-discretize continuous-valued attributes (e.g. age) that produce
+    # too many small groups.  Bin by quartile boundaries into 4 groups.
+    MAX_UNIQUE_GROUPS = 10
+    if n_groups > MAX_UNIQUE_GROUPS:
+        import pandas as _pd
+        print(f"  [Fairness] {name}: {n_groups} unique values → "
+              f"discretizing into 4 quartile-based groups")
+        _binned, _bins = _pd.qcut(sensitive, q=4, duplicates="drop", retbins=True)
+        labels = [f"{_bins[i]:.1f}-{_bins[i+1]:.1f}"
+                  for i in range(len(_bins) - 1)]
+        sensitive = _pd.cut(sensitive, bins=_bins, labels=labels,
+                            include_lowest=True).values.astype(str)
+        groups = sorted(np.unique(sensitive))
+        n_groups = len(groups)
+
     print(f"\nFairness — {name}:")
     print(f"{'Group':>16s}  {'n':>6s}  {'Acc':>8s}  {'PosRate':>8s}")
     print("-" * 48)

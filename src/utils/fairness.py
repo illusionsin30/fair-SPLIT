@@ -50,7 +50,7 @@ def fair_preprocess(X, sensitive_cols):
 # Post-processing: demographic parity calibration
 # ====================================================================
 
-def fair_calibrate(y_pred, y_true, sensitive, target_rate=None):
+def fair_calibrate(y_pred, y_true, sensitive, target_rate=None, random_state=None):
     """Adjust per-group predictions to equalize positive rates.
 
     Algorithm:
@@ -69,12 +69,20 @@ def fair_calibrate(y_pred, y_true, sensitive, target_rate=None):
         sensitive: Sensitive attribute values (same length).
         target_rate: Target positive prediction rate.  If None, uses
             the weighted average across all groups.
+        random_state: Optional random seed or NumPy RNG used for
+            deterministic tie-breaking when predictions must be flipped.
 
     Returns:
         y_fair: Calibrated predictions.
     """
     y_fair = y_pred.copy()
     groups = np.unique(sensitive)
+    if isinstance(random_state, (np.random.RandomState, np.random.Generator)):
+        rng = random_state
+    elif random_state is None:
+        rng = np.random
+    else:
+        rng = np.random.RandomState(random_state)
 
     if target_rate is None:
         target_rate = np.mean(y_pred)
@@ -92,7 +100,7 @@ def fair_calibrate(y_pred, y_true, sensitive, target_rate=None):
             if n_flip > 0 and len(pos_idx) > 0:
                 # Flip the ones predicted 1 that are actually 0 first
                 true_neg = pos_idx[y_true[pos_idx] == 0]
-                flip_idx = np.random.choice(
+                flip_idx = rng.choice(
                     true_neg if len(true_neg) >= n_flip else pos_idx,
                     size=min(n_flip, len(pos_idx)), replace=False,
                 )
@@ -105,7 +113,7 @@ def fair_calibrate(y_pred, y_true, sensitive, target_rate=None):
             if n_flip > 0 and len(neg_idx) > 0:
                 # Flip the ones predicted 0 that are actually 1 first
                 false_neg = neg_idx[y_true[neg_idx] == 1]
-                flip_idx = np.random.choice(
+                flip_idx = rng.choice(
                     false_neg if len(false_neg) >= n_flip else neg_idx,
                     size=min(n_flip, len(neg_idx)), replace=False,
                 )

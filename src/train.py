@@ -38,25 +38,25 @@ from .utils.helpers import used_split_features
 
 MODEL_CHOICES = ["cart", "split", "licketysplit", "resplit"]
 DATASET_CHOICES = [
-    # SPLIT paper benchmarks
-    "adult", "bike", "spambase", "bank", "covertype",
-    "compass", "heloc", "thyroid",
-    # Fairness / traditional benchmarks
-    "german", "communities", "heart",
+    "adult", "bank", "compass", "german", "heloc", "spambase",
+    "covertype", "thyroid", "communities", "heart",
     "lawschool", "acsincome",
-    # sklearn
-    "iris", "diabetes",
 ]
 
 # Sensitive attributes for fairness evaluation (column names in raw data)
 SENSITIVE_ATTRS = {
     "adult": ["sex", "race"],
     "compass": ["sex", "race"],
-    "german": ["Attribute9", "Attribute13"],  # sex+status, age
+    "german": ["personal_status", "age"],
     "bank": ["marital", "age"],
-    "lawschool": ["gender", "race"],
+    "lawschool": ["race", "gender"],
     "acsincome": ["SEX", "RAC1P"],
-    "communities": ["racepctblack"],
+    "communities": [],
+    "spambase": [],
+    "covertype": [],
+    "thyroid": [],
+    "heloc": [],
+    "heart": [],
 }
 
 
@@ -65,11 +65,18 @@ def _run_fairness_eval(y_test, y_pred, sensitive_test, args, label=""):
     if not sensitive_test:
         return
     for col, vals in sensitive_test.items():
+        if col is None or vals is None or col not in SENSITIVE_ATTRS.get(args.dataset, []):
+            continue
         tag = f"{col}{' ' + label if label else ''}"
         evaluate_fairness(y_test, y_pred, vals, name=tag)
         if args.fair:
             from sklearn.metrics import accuracy_score
-            y_cal = fair_calibrate(y_pred, y_test, vals)
+            y_cal = fair_calibrate(
+                y_pred,
+                y_test,
+                vals,
+                random_state=args.random_state,
+            )
             evaluate_fairness(y_test, y_cal, vals, name=f"{col} (calibrated)")
             acc_before = accuracy_score(y_test, y_pred)
             acc_after = accuracy_score(y_test, y_cal)
@@ -114,6 +121,14 @@ Examples:
     parser.add_argument(
         "--fair", action="store_true", default=False,
         help="Drop sensitive columns + per-group threshold calibration.",
+    )
+    parser.add_argument(
+        "--results_dir", type=str, default="results",
+        help="Directory for training logs (default: results).",
+    )
+    parser.add_argument(
+        "--log_suffix", type=str, default="",
+        help="Optional suffix inserted before .log, e.g. seed7.",
     )
 
     # --- CART ---
@@ -218,8 +233,26 @@ def prepare_data(name, test_size, random_state, fair=False):
     # Save sensitive values for fairness evaluation before dropping
     sensitive_data = {}
     for col in SENSITIVE_ATTRS.get(name, []):
+        if not col:
+            continue
         if col in X.columns:
-            sensitive_data[col] = X[col].copy()
+            vals = X[col].copy()
+            # Discretize continuous-valued sensitive attrs (e.g. age)
+            # so fairness evaluation uses meaningful groups, not raw values.
+            if vals.dtype.kind in ("i", "f") and vals.nunique() > 10:
+                _, cut_bins = pd.qcut(vals.unique(), q=4, retbins=True,
+                                      duplicates="drop")
+                n_bins = len(cut_bins) - 1
+                labels = [f"{cut_bins[i]:.0f}-{cut_bins[i+1]:.0f}"
+                          for i in range(n_bins)]
+                vals = pd.cut(vals, bins=cut_bins, labels=labels,
+                              include_lowest=True)
+                print(f"  [Fairness] Discretized '{col}' into {n_bins} "
+                      f"groups: {', '.join(labels)}")
+            sensitive_data[col] = vals
+        else:
+            print(f"  [WARN] Fairness column '{col}' not found. "
+                  f"Available: {list(X.columns)[:8]}...")
 
     # Fair pre-processing: drop sensitive columns
     if fair:
@@ -281,7 +314,7 @@ def train_cart(args):
     elapsed = time.perf_counter() - t0
 
     evaluate_classification(y_test, y_pred, y_train)
-    _show_used_features(model)
+    _show_used_features(model, X_test.columns.tolist() if hasattr(X_test, "columns") else None)
     _run_fairness_eval(y_test, y_pred, sensitive_test, args)
     print(f"Training time: {elapsed:.3f}s")
 
@@ -289,7 +322,7 @@ def train_cart(args):
 def train_split(args):
     """Train the SPLIT model."""
     X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
-        args.dataset, args.test_size, args.random_state,
+        args.dataset, args.test_size, args.random_state, fair=args.fair,
     )
 
     header("SPLIT", args)
@@ -322,7 +355,7 @@ def train_split(args):
 def train_resplit(args):
     """Train the ReSPLIT model."""
     X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
-        args.dataset, args.test_size, args.random_state,
+        args.dataset, args.test_size, args.random_state, fair=args.fair,
     )
 
     header("ReSPLIT", args)
@@ -357,7 +390,7 @@ def train_resplit(args):
     y_best = model.predict(X_test, idx=0)
     evaluate_classification(y_test, y_best, y_train)
     _show_used_features(model)
-    _run_fairness_eval(y_test, y_best, X_test, args.dataset)
+    _run_fairness_eval(y_test, y_best, sensitive_test, args)
     print(f"Training time: {elapsed:.3f}s")
 
 
@@ -366,7 +399,13 @@ def train_resplit(args):
 # ------------------------------------------------------------------
 
 def _show_used_features(model, feature_names=None):
-    """Print the set of features actually used for splits in the tree."""
+    """Print the set of features actually used for splits in the tree.
+
+    For SPLIT/ReSPLIT/LicketySPLIT (which binarize internally), the model
+    stores binarized feature names in ``feature_names_``.  For CART the tree
+    nodes already hold human-readable column names or binarized threshold
+    strings pulled from the training DataFrame.
+    """
     tree = None
     if hasattr(model, "root") and model.root is not None:
         tree = model.root                     # CART
@@ -378,9 +417,13 @@ def _show_used_features(model, feature_names=None):
             tree = tree.tree  # might be wrapped
     if tree is None:
         return
-    if feature_names is None:
-        feature_names = getattr(model, "feature_names_", None)
-    feats = used_split_features(tree, feature_names)
+    # Use model's binarized feature names when available; fall back to
+    # caller-supplied names (useful for CART with original column names).
+    binarized_names = getattr(model, "feature_names_", None)
+    if binarized_names is not None:
+        feats = used_split_features(tree, binarized_names)
+    else:
+        feats = used_split_features(tree, feature_names)
     if feats:
         print(f"Split features ({len(feats)}): {', '.join(str(f) for f in feats)}")
     else:
@@ -399,10 +442,14 @@ def _param_summary(model_name, args):
         return (f"max_depth={args.max_depth}, "
                 f"min_samples_split={args.min_samples_split}, "
                 f"min_samples_leaf={args.min_samples_leaf}")
-    elif model_name in ("SPLIT", "LicketySPLIT"):
+    elif model_name in ("SPLIT",):
         return (f"lookahead={args.lookahead_depth}, "
                 f"depth={args.full_depth_budget}, "
                 f"reg={args.reg}, leaf_fill={args.leaf_fill}, "
+                f"max_features={args.max_features or 'all'}")
+    elif model_name == "LicketySPLIT":
+        return (f"depth={args.full_depth_budget}, "
+                f"reg={args.reg}, "
                 f"max_features={args.max_features or 'all'}")
     else:  # ReSPLIT
         return (f"lookahead={args.lookahead_depth}, "
@@ -416,7 +463,7 @@ def _param_summary(model_name, args):
 def train_licketysplit(args):
     """Train the LicketySPLIT model."""
     X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
-        args.dataset, args.test_size, args.random_state,
+        args.dataset, args.test_size, args.random_state, fair=args.fair,
     )
 
     header("LicketySPLIT", args)
@@ -424,7 +471,6 @@ def train_licketysplit(args):
 
     model = LicketySPLIT(
         full_depth_budget=args.full_depth_budget,
-        lookahead_range=args.lookahead_depth,
         reg=args.reg,
         verbose=True,
         binarize=args.binarize,
@@ -475,18 +521,41 @@ class _Tee:
 
 
 def _make_filename(args):
-    """Build log filename: model-dataset-d{depth}-{bin/raw}-{fair/nofair}.log"""
+    """Build log filename: model-dataset-d{depth}-{bin/raw}-{fair/nofair}.log
+
+    For the SPLIT family the *leaf_fill* mode is always inserted after the
+    model name so that greedy and optimal runs produce separate log files.
+    Examples:
+        cart-adult-d5-raw-fair.log
+        split-greedy-bank-d5-bin-fair.log
+        split-optimal-bank-d5-bin-fair.log
+        resplit-compass-d5-bin-fair.log
+    """
     model = args.model
     dataset = args.dataset
-    depth = getattr(args, "max_depth", None) or getattr(
-        args, "full_depth_budget", 5)
+    # CART uses --max_depth; SPLIT/LicketySPLIT/ReSPLIT use --depth → full_depth_budget
+    if model == "cart":
+        depth = getattr(args, "max_depth", 6)
+    else:
+        depth = getattr(args, "full_depth_budget", 5)
     # CART: binarized only if --binarize_cart; SPLIT family: always binarized
     if model == "cart":
         binarize = "bin" if getattr(args, "binarize_cart", False) else "raw"
     else:
         binarize = "raw" if getattr(args, "binarize", True) is False else "bin"
     fair = "fair" if args.fair else "nofair"
-    return os.path.join("results", f"{model}-{dataset}-d{depth}-{binarize}-{fair}.log")
+    # Build display name: "cart", "split-greedy", "split-optimal", "resplit"
+    if model == "split":
+        leaf = getattr(args, "leaf_fill", "greedy")
+        display_model = f"split-{leaf}"
+    else:
+        display_model = model
+
+    filename = f"{display_model}-{dataset}-d{depth}-{binarize}-{fair}"
+    if getattr(args, "log_suffix", ""):
+        safe_suffix = str(args.log_suffix).strip().replace(os.sep, "_")
+        filename = f"{filename}-{safe_suffix}"
+    return os.path.join(getattr(args, "results_dir", "results"), f"{filename}.log")
 
 
 def main(argv=None):
@@ -494,7 +563,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     log_path = _make_filename(args)
-    os.makedirs("results", exist_ok=True)
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
     tee = _Tee(log_path)
     sys.stdout = tee
 
