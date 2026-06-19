@@ -31,7 +31,12 @@ from .data import (
 )
 from .data import prepare_for_split
 from .evaluate import evaluate_classification, evaluate_fairness
-from .utils.fairness import fair_preprocess, fair_calibrate
+from .utils.fairness import (
+    apply_leaf_pareto_recalibration,
+    fair_preprocess,
+    fair_calibrate,
+    fit_leaf_pareto_recalibrator,
+)
 from .tree import CART, SPLIT, ReSPLIT, LicketySPLIT
 from .utils.helpers import used_split_features
 
@@ -60,7 +65,18 @@ SENSITIVE_ATTRS = {
 }
 
 
-def _run_fairness_eval(y_test, y_pred, sensitive_test, args, label=""):
+def _run_fairness_eval(
+    y_test,
+    y_pred,
+    sensitive_test,
+    args,
+    label="",
+    model=None,
+    X_cal=None,
+    y_cal=None,
+    sensitive_cal=None,
+    X_test=None,
+):
     """Evaluate fairness using pre-extracted sensitive values."""
     if not sensitive_test:
         return
@@ -69,19 +85,51 @@ def _run_fairness_eval(y_test, y_pred, sensitive_test, args, label=""):
             continue
         tag = f"{col}{' ' + label if label else ''}"
         evaluate_fairness(y_test, y_pred, vals, name=tag)
-        if args.fair:
+        if getattr(args, "fair", False):
             from sklearn.metrics import accuracy_score
-            y_cal = fair_calibrate(
-                y_pred,
-                y_test,
-                vals,
-                random_state=args.random_state,
-            )
-            evaluate_fairness(y_test, y_cal, vals, name=f"{col} (calibrated)")
             acc_before = accuracy_score(y_test, y_pred)
-            acc_after = accuracy_score(y_test, y_cal)
-            print(f"  Calibrated accuracy: {acc_after:.4f}"
-                  f" (was {acc_before:.4f}, Δ={acc_after - acc_before:+.4f})")
+            fair_post = getattr(args, "fair_post", "sample")
+            if fair_post == "sample":
+                y_calibrated = fair_calibrate(
+                    y_pred,
+                    y_test,
+                    vals,
+                    random_state=args.random_state,
+                )
+                evaluate_fairness(
+                    y_test, y_calibrated, vals, name=f"{col} (calibrated)"
+                )
+                acc_after = accuracy_score(y_test, y_calibrated)
+                print(f"  Calibrated accuracy: {acc_after:.4f}"
+                      f" (was {acc_before:.4f}, Δ={acc_after - acc_before:+.4f})")
+            elif fair_post == "leaf_pareto":
+                if (model is None or X_cal is None or y_cal is None or
+                        sensitive_cal is None or X_test is None or
+                        col not in sensitive_cal):
+                    print(f"  [LeafPareto] Skipped '{col}': "
+                          "calibration data unavailable")
+                    continue
+                recalibrator = fit_leaf_pareto_recalibrator(
+                    model=model,
+                    X_cal=X_cal,
+                    y_cal=y_cal,
+                    sensitive=sensitive_cal[col],
+                    metric=getattr(args, "fair_metric", "dp"),
+                    fair_lambda=getattr(args, "fair_lambda", 1.0),
+                    acc_budget=getattr(args, "fair_acc_budget", 0.02),
+                )
+                y_calibrated = apply_leaf_pareto_recalibration(
+                    model=model,
+                    X=X_test,
+                    base_pred=y_pred,
+                    recalibrator=recalibrator,
+                )
+                evaluate_fairness(
+                    y_test, y_calibrated, vals, name=f"{col} (LPFR)"
+                )
+                acc_after = accuracy_score(y_test, y_calibrated)
+                print(f"  LPFR accuracy: {acc_after:.4f}"
+                      f" (was {acc_before:.4f}, Δ={acc_after - acc_before:+.4f})")
 
 
 def get_parser():
@@ -121,6 +169,23 @@ Examples:
     parser.add_argument(
         "--fair", action="store_true", default=False,
         help="Drop sensitive columns + per-group threshold calibration.",
+    )
+    parser.add_argument(
+        "--fair_post", type=str, default="sample",
+        choices=["sample", "leaf_pareto"],
+        help="Fair post-processing method: sample or leaf_pareto.",
+    )
+    parser.add_argument(
+        "--fair_metric", type=str, default="dp", choices=["dp", "eo"],
+        help="Fairness metric for leaf_pareto: dp or eo.",
+    )
+    parser.add_argument(
+        "--fair_lambda", type=float, default=1.0,
+        help="Fairness gain weight for leaf_pareto post-processing.",
+    )
+    parser.add_argument(
+        "--fair_acc_budget", type=float, default=0.02,
+        help="Maximum calibration accuracy drop for leaf_pareto.",
     )
     parser.add_argument(
         "--results_dir", type=str, default="results",
@@ -265,12 +330,42 @@ def prepare_data(name, test_size, random_state, fair=False):
         X, y, test_size, random_state,
     )
 
-    # Align sensitive data with test split
+    # Align sensitive data with train/test splits
+    sensitive_train = {}
     sensitive_test = {}
     for col, vals in sensitive_data.items():
+        sensitive_train[col] = vals.iloc[X_train.index].values
         sensitive_test[col] = vals.iloc[X_test.index].values
 
-    return X_train, X_test, y_train, y_test, num_feats, cat_feats, sensitive_test
+    return (
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        num_feats,
+        cat_feats,
+        sensitive_train,
+        sensitive_test,
+    )
+
+
+def _unpack_prepared_data(prepared):
+    """Unpack current or legacy prepare_data return values."""
+    if len(prepared) == 8:
+        return prepared
+    if len(prepared) == 7:
+        X_train, X_test, y_train, y_test, num_feats, cat_feats, sensitive_test = prepared
+        return (
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            num_feats,
+            cat_feats,
+            {},
+            sensitive_test,
+        )
+    raise ValueError(f"prepare_data returned {len(prepared)} values; expected 7 or 8")
 
 
 # ------------------------------------------------------------------
@@ -279,10 +374,12 @@ def prepare_data(name, test_size, random_state, fair=False):
 
 def train_cart(args):
     """Train the CART model (classification)."""
+    prepared = prepare_data(
+        args.dataset, args.test_size, args.random_state, fair=args.fair,
+    )
     (X_train, X_test, y_train, y_test,
-     num_feats, cat_feats, sensitive_test) = prepare_data(
-        args.dataset, args.test_size, args.random_state,
-        fair=args.fair,
+     num_feats, cat_feats, sensitive_train, sensitive_test) = (
+        _unpack_prepared_data(prepared)
     )
 
     # If --binarize_cart is set, binarize features before passing to CART
@@ -315,14 +412,24 @@ def train_cart(args):
 
     evaluate_classification(y_test, y_pred, y_train)
     _show_used_features(model, X_test.columns.tolist() if hasattr(X_test, "columns") else None)
-    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
+    _run_fairness_eval(
+        y_test, y_pred, sensitive_test, args,
+        model=model,
+        X_cal=X_train,
+        y_cal=y_train,
+        sensitive_cal=sensitive_train,
+        X_test=X_test,
+    )
     print(f"Training time: {elapsed:.3f}s")
 
 
 def train_split(args):
     """Train the SPLIT model."""
-    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
+    prepared = prepare_data(
         args.dataset, args.test_size, args.random_state, fair=args.fair,
+    )
+    X_train, X_test, y_train, y_test, _, _, sensitive_train, sensitive_test = (
+        _unpack_prepared_data(prepared)
     )
 
     header("SPLIT", args)
@@ -347,15 +454,25 @@ def train_split(args):
     evaluate_classification(y_test, y_pred, y_train)
     print(f"Number of leaves: {model.num_leaves()}")
     _show_used_features(model)
-    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
+    _run_fairness_eval(
+        y_test, y_pred, sensitive_test, args,
+        model=model,
+        X_cal=X_train,
+        y_cal=y_train,
+        sensitive_cal=sensitive_train,
+        X_test=X_test,
+    )
     print(f"Training time: {elapsed:.3f}s")
     print(model.tree)
 
 
 def train_resplit(args):
     """Train the ReSPLIT model."""
-    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
+    prepared = prepare_data(
         args.dataset, args.test_size, args.random_state, fair=args.fair,
+    )
+    X_train, X_test, y_train, y_test, _, _, sensitive_train, sensitive_test = (
+        _unpack_prepared_data(prepared)
     )
 
     header("ReSPLIT", args)
@@ -390,7 +507,14 @@ def train_resplit(args):
     y_best = model.predict(X_test, idx=0)
     evaluate_classification(y_test, y_best, y_train)
     _show_used_features(model)
-    _run_fairness_eval(y_test, y_best, sensitive_test, args)
+    _run_fairness_eval(
+        y_test, y_best, sensitive_test, args,
+        model=model,
+        X_cal=X_train,
+        y_cal=y_train,
+        sensitive_cal=sensitive_train,
+        X_test=X_test,
+    )
     print(f"Training time: {elapsed:.3f}s")
 
 
@@ -462,8 +586,11 @@ def _param_summary(model_name, args):
 # ------------------------------------------------------------------
 def train_licketysplit(args):
     """Train the LicketySPLIT model."""
-    X_train, X_test, y_train, y_test, _, _, sensitive_test = prepare_data(
+    prepared = prepare_data(
         args.dataset, args.test_size, args.random_state, fair=args.fair,
+    )
+    X_train, X_test, y_train, y_test, _, _, sensitive_train, sensitive_test = (
+        _unpack_prepared_data(prepared)
     )
 
     header("LicketySPLIT", args)
@@ -488,7 +615,14 @@ def train_licketysplit(args):
     evaluate_classification(y_test, y_pred, y_train)
     print(f"Number of leaves: {model.num_leaves()}")
     _show_used_features(model)
-    _run_fairness_eval(y_test, y_pred, sensitive_test, args)
+    _run_fairness_eval(
+        y_test, y_pred, sensitive_test, args,
+        model=model,
+        X_cal=X_train,
+        y_cal=y_train,
+        sensitive_cal=sensitive_train,
+        X_test=X_test,
+    )
     print(f"Training time: {elapsed:.3f}s")
     print(model.tree)
 
@@ -509,11 +643,12 @@ class _Tee:
     """Write to both stdout and a log file."""
     def __init__(self, filepath):
         self.terminal = sys.stdout
-        self.log = open(filepath, "w")
+        self.log = open(filepath, "w", buffering=1)
 
     def write(self, message):
         self.terminal.write(message)
         self.log.write(message)
+        self.flush()
 
     def flush(self):
         self.terminal.flush()
@@ -521,12 +656,13 @@ class _Tee:
 
 
 def _make_filename(args):
-    """Build log filename: model-dataset-d{depth}-{bin/raw}-{fair/nofair}.log
+    """Build log filename: model-dataset-d{depth}-{bin/raw}-{mode}.log
 
     For the SPLIT family the *leaf_fill* mode is always inserted after the
     model name so that greedy and optimal runs produce separate log files.
     Examples:
         cart-adult-d5-raw-fair.log
+        cart-adult-d5-raw-lpfr.log
         split-greedy-bank-d5-bin-fair.log
         split-optimal-bank-d5-bin-fair.log
         resplit-compass-d5-bin-fair.log
@@ -543,7 +679,12 @@ def _make_filename(args):
         binarize = "bin" if getattr(args, "binarize_cart", False) else "raw"
     else:
         binarize = "raw" if getattr(args, "binarize", True) is False else "bin"
-    fair = "fair" if args.fair else "nofair"
+    if args.fair and getattr(args, "fair_post", "sample") == "leaf_pareto":
+        mode = "lpfr"
+    elif args.fair:
+        mode = "fair"
+    else:
+        mode = "nofair"
     # Build display name: "cart", "split-greedy", "split-optimal", "resplit"
     if model == "split":
         leaf = getattr(args, "leaf_fill", "greedy")
@@ -551,7 +692,7 @@ def _make_filename(args):
     else:
         display_model = model
 
-    filename = f"{display_model}-{dataset}-d{depth}-{binarize}-{fair}"
+    filename = f"{display_model}-{dataset}-d{depth}-{binarize}-{mode}"
     if getattr(args, "log_suffix", ""):
         safe_suffix = str(args.log_suffix).strip().replace(os.sep, "_")
         filename = f"{filename}-{safe_suffix}"

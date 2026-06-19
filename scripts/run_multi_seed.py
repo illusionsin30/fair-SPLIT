@@ -46,6 +46,7 @@ def infer_experiment_identity(train_args: Sequence[str]) -> Dict[str, str]:
     model = ""
     dataset = ""
     leaf_fill = "greedy"
+    fair_post = "sample"
     for index, arg in enumerate(train_args):
         if arg == "--model" and index + 1 < len(train_args):
             model = train_args[index + 1]
@@ -53,12 +54,20 @@ def infer_experiment_identity(train_args: Sequence[str]) -> Dict[str, str]:
             dataset = train_args[index + 1]
         elif arg == "--leaf_fill" and index + 1 < len(train_args):
             leaf_fill = train_args[index + 1]
+        elif arg == "--fair_post" and index + 1 < len(train_args):
+            fair_post = train_args[index + 1]
 
     display_model = f"split-{leaf_fill}" if model == "split" else model
+    if "--fair" not in train_args:
+        mode = "nofair"
+    elif fair_post == "leaf_pareto":
+        mode = "lpfr"
+    else:
+        mode = "fair"
     return {
         "model": display_model,
         "dataset": dataset,
-        "mode": "fair" if "--fair" in train_args else "nofair",
+        "mode": mode,
     }
 
 
@@ -152,21 +161,25 @@ def run_one_seed(
         stderr=subprocess.STDOUT,
     )
     if completed.returncode != 0:
+        failure_log = _write_failure_log(seed, train_args, logs_dir, completed.stdout)
         return {
             "seed": seed,
             "ok": False,
             "returncode": completed.returncode,
             "output": completed.stdout,
+            "failure_log": failure_log,
         }
 
     log_path = _extract_log_path(completed.stdout)
     if not log_path:
+        failure_log = _write_failure_log(seed, train_args, logs_dir, completed.stdout)
         return {
             "seed": seed,
             "ok": False,
             "returncode": 0,
             "output": completed.stdout,
             "error": "Could not find 'Log saved to:' line in training output.",
+            "failure_log": failure_log,
         }
     if not os.path.isabs(log_path):
         log_path = os.path.join(ROOT, log_path)
@@ -174,6 +187,28 @@ def run_one_seed(
     identity = infer_experiment_identity(train_args)
     parsed, _ = table_results.parse_log(log_path, identity["dataset"])
     return {"seed": seed, "ok": True, "log_path": log_path, "result": parsed}
+
+
+def _write_failure_log(
+    seed: int,
+    train_args: Sequence[str],
+    logs_dir: str,
+    output: str,
+) -> str:
+    """Write captured failed subprocess output to a diagnostic log."""
+    identity = infer_experiment_identity(train_args)
+    filename = (
+        f"{identity['model']}-{identity['dataset']}-"
+        f"{identity['mode']}-seed{seed}.failure.txt"
+    )
+    path = os.path.join(logs_dir, filename)
+    os.makedirs(logs_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as file_obj:
+        file_obj.write("$ ")
+        file_obj.write(" ".join([sys.executable, "-m", "src.train", *train_args]))
+        file_obj.write(f" --random_state {seed}\n\n")
+        file_obj.write(output)
+    return path
 
 
 def build_parser() -> argparse.ArgumentParser:

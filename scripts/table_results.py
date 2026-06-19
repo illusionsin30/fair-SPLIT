@@ -8,6 +8,7 @@ parses each corresponding ``*.log`` file, and writes a single
 Log filename convention (set by ``src/train.py:_make_filename``)::
 
     cart-adult-d5-raw-fair.log
+    cart-adult-d5-raw-lpfr.log
     cart-adult-d5-raw-nofair.log
     split-greedy-bank-d5-bin-fair.log
     split-optimal-bank-d5-bin-fair.log
@@ -17,6 +18,7 @@ Output structure (one JSON file per mode)::
 
     results/all_results_nofair.json
     results/all_results_fair.json
+    results/all_results_lpfr.json
 
 Each file has the same internal structure::
 
@@ -35,6 +37,10 @@ Each file has the same internal structure::
               "calibrated_sp_diff": 0.0001,   // fair-mode only
               "calibrated_di_ratio": 0.9994,  // fair-mode only
               "calibrated_eo_diff": 0.0069    // fair-mode only
+              "lpfr_acc": 0.8471,              // lpfr-mode only
+              "lpfr_sp_diff": 0.0085,          // lpfr-mode only
+              "lpfr_di_ratio": 0.9630,         // lpfr-mode only
+              "lpfr_eo_diff": 0.0112           // lpfr-mode only
             },
             ...
           }
@@ -56,6 +62,7 @@ RESULTS_DIR = os.path.join(ROOT, "results")
 DONE_FILE = os.path.join(RESULTS_DIR, ".done_experiments")
 OUT_FILE_NOFAIR = os.path.join(RESULTS_DIR, "all_results_nofair.json")
 OUT_FILE_FAIR = os.path.join(RESULTS_DIR, "all_results_fair.json")
+OUT_FILE_LPFR = os.path.join(RESULTS_DIR, "all_results_lpfr.json")
 
 # ---------------------------------------------------------------------------
 # Sensitive-attribute map — kept in sync with src/train.py
@@ -82,9 +89,10 @@ MODEL_ORDER = ["cart", "split-greedy", "split-optimal", "resplit"]
 # Single-log parser — scans lines once and extracts everything.
 # ---------------------------------------------------------------------------
 
-# Match a line like:  "Fairness — sex:"  or  "Fairness — sex (calibrated):"
+# Match lines like "Fairness — sex:", "Fairness — sex (calibrated):",
+# or "Fairness — sex (LPFR):".
 _FAIR_BLOCK_HEADER = re.compile(
-    r"^Fairness — (?P<attr>.+?)(?: \(calibrated\))?:$"
+    r"^Fairness — (?P<attr>.+?)(?: \((?P<post>calibrated|LPFR)\))?:$"
 )
 
 # Metric patterns — use .search() so leading whitespace doesn't matter.
@@ -96,16 +104,20 @@ _RE_DI_RATIO = re.compile(r"Disparate impact ratio:\s+([\d.]+)")
 _RE_EO_DIFF = re.compile(r"Equal opportunity diff:\s+([\d.]+)")
 
 
-def _parse_calibrated_acc(line):
-    """Return calibrated_acc float from a line like
-    '  Calibrated accuracy: 0.8489 (was 0.8442, Δ=+0.0046)'
+def _parse_post_acc(line):
+    """Return postprocessor accuracy key/value from a line like
+    '  Calibrated accuracy: 0.8489 (was 0.8442, Δ=+0.0046)' or
+    '  LPFR accuracy: 0.8489 (was 0.8442, Δ=+0.0046)'.
     Returns None if the line doesn't match.
     """
     m = re.search(
-        r"Calibrated accuracy:\s+([\d.]+)\s+\(was\s+[\d.]+\s*,\s*Δ=.+\)",
+        r"(Calibrated|LPFR) accuracy:\s+([\d.]+)\s+\(was\s+[\d.]+\s*,\s*Δ=.+\)",
         line,
     )
-    return float(m.group(1)) if m else None
+    if not m:
+        return None
+    prefix = "calibrated" if m.group(1) == "Calibrated" else "lpfr"
+    return f"{prefix}_acc", float(m.group(2))
 
 
 def parse_log(filepath, dataset):
@@ -130,9 +142,10 @@ def parse_log(filepath, dataset):
         elif (m := _RE_TIME.search(line)):
             result["training_time_s"] = float(m.group(1))
 
-    # Detect fair mode — look for "FairPreprocess" or "FairCalibrate"
+    # Detect fair mode — look for any fairness post/pre-processing marker.
     for line in lines:
-        if "FairPreprocess" in line or "FairCalibrate" in line:
+        if ("FairPreprocess" in line or "FairCalibrate" in line or
+                "LeafPareto" in line or "LPFR accuracy" in line):
             is_fair = True
             break
 
@@ -143,7 +156,7 @@ def parse_log(filepath, dataset):
     fairness = {}
     current_attr = None        # e.g. "sex"
     current_block = {}         # metrics being collected
-    is_calibrated = False
+    post_prefix = ""
 
     for line in lines:
         # Detect fairness block header
@@ -158,7 +171,13 @@ def parse_log(filepath, dataset):
             # Start new block
             current_attr = fm.group("attr").strip()
             current_block = {}
-            is_calibrated = "calibrated" in line
+            post = fm.group("post")
+            if post == "calibrated":
+                post_prefix = "calibrated"
+            elif post == "LPFR":
+                post_prefix = "lpfr"
+            else:
+                post_prefix = ""
             continue
 
         if current_attr is None:
@@ -167,18 +186,19 @@ def parse_log(filepath, dataset):
         # Metric lines within a fairness block
         if (m := _RE_SP_DIFF.search(line)):
             val = float(m.group(1))
-            key = "calibrated_sp_diff" if is_calibrated else "sp_diff"
+            key = f"{post_prefix}_sp_diff" if post_prefix else "sp_diff"
             current_block[key] = val
         elif (m := _RE_DI_RATIO.search(line)):
             val = float(m.group(1))
-            key = "calibrated_di_ratio" if is_calibrated else "di_ratio"
+            key = f"{post_prefix}_di_ratio" if post_prefix else "di_ratio"
             current_block[key] = val
         elif (m := _RE_EO_DIFF.search(line)):
             val = float(m.group(1))
-            key = "calibrated_eo_diff" if is_calibrated else "eo_diff"
+            key = f"{post_prefix}_eo_diff" if post_prefix else "eo_diff"
             current_block[key] = val
-        elif (cal_acc := _parse_calibrated_acc(line)) is not None:
-            current_block["calibrated_acc"] = cal_acc
+        elif (post_acc := _parse_post_acc(line)) is not None:
+            key, value = post_acc
+            current_block[key] = value
 
     # Save last block
     if current_attr is not None and current_block:
@@ -258,6 +278,7 @@ def main():
 
     output_nofair = {}
     output_fair = {}
+    output_lpfr = {}
     for entry in done:
         parts = entry.split("/")
         if len(parts) != 3:
@@ -276,11 +297,17 @@ def main():
             print(f"  [WARN] parsing {log_path}: {exc}")
             continue
 
-        target = output_fair if is_fair else output_nofair
+        if mode == "lpfr":
+            target = output_lpfr
+        elif is_fair:
+            target = output_fair
+        else:
+            target = output_nofair
         target.setdefault(model, {})[dataset] = parsed
 
     output_nofair = _order_output(output_nofair)
     output_fair = _order_output(output_fair)
+    output_lpfr = _order_output(output_lpfr)
 
     def _count(raw):
         return sum(len(raw[m][ds]) for m in raw for ds in raw[m])
@@ -292,6 +319,10 @@ def main():
     with open(OUT_FILE_FAIR, "w") as fh:
         json.dump(output_fair, fh, indent=2, ensure_ascii=False)
     print(f"Wrote {OUT_FILE_FAIR}  ({_count(output_fair)} experiments)")
+
+    with open(OUT_FILE_LPFR, "w") as fh:
+        json.dump(output_lpfr, fh, indent=2, ensure_ascii=False)
+    print(f"Wrote {OUT_FILE_LPFR}  ({_count(output_lpfr)} experiments)")
 
 
 if __name__ == "__main__":

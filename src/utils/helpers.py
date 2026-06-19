@@ -149,3 +149,69 @@ def predict_batch(X, tree, classes):
         1-D numpy array of predicted class labels.
     """
     return np.array([predict_sample(X[i], tree, classes) for i in range(len(X))])
+
+
+def split_leaf_id_sample(x, node, path=()):
+    """Return a stable path-based leaf id for one SPLIT sample.
+
+    Args:
+        x: 1-D numpy array of binary features.
+        node: Current SPLIT tree node.
+        path: Tuple of branch labels accumulated from the root.
+
+    Returns:
+        Tuple representing the path to the reached leaf.
+    """
+    if isinstance(node, SPLITLeaf):
+        return path
+    if x[node.feature]:
+        return split_leaf_id_sample(x, node.left_child, path + ("T",))
+    return split_leaf_id_sample(x, node.right_child, path + ("F",))
+
+
+def split_leaf_id_batch(X, tree):
+    """Return path-based leaf ids for a batch of SPLIT samples.
+
+    Args:
+        X: 2-D numpy array of binary features.
+        tree: Root of the SPLIT tree.
+
+    Returns:
+        List of tuple leaf ids.
+    """
+    return [split_leaf_id_sample(X[i], tree) for i in range(len(X))]
+
+
+def cart_leaf_id_sample(row, node, path=()):
+    """Return a stable path-based leaf id for one CART sample.
+
+    Args:
+        row: A pandas Series-like sample.
+        node: Current CART node.
+        path: Tuple of branch labels accumulated from the root.
+
+    Returns:
+        Tuple representing the path to the reached leaf.
+    """
+    if getattr(node, "left", None) is None:
+        return path
+    if node.is_numeric:
+        go_left = row[node.feature] <= node.threshold
+    else:
+        go_left = row[node.feature] in node.left_categories
+    if go_left:
+        return cart_leaf_id_sample(row, node.left, path + ("L",))
+    return cart_leaf_id_sample(row, node.right, path + ("R",))
+
+
+def cart_leaf_id_batch(X, tree):
+    """Return path-based leaf ids for a batch of CART samples.
+
+    Args:
+        X: DataFrame of CART input samples.
+        tree: Root CART node.
+
+    Returns:
+        List of tuple leaf ids.
+    """
+    return [cart_leaf_id_sample(row, tree) for _, row in X.iterrows()]

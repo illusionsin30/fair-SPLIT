@@ -58,6 +58,11 @@ bash scripts/train.sh --model split --dataset acsincome --depth 5 --reg 0.001 --
 --test_size FLOAT         Test fraction (default: 0.2)
 --random_state INT        Random seed (default: 42)
 --fair                    Enable fairness preprocessing + calibration
+--fair_post {sample,leaf_pareto}
+                          Fair postprocessing method (default: sample)
+--fair_metric {dp,eo}     LPFR objective: demographic parity or equal opportunity
+--fair_lambda FLOAT       LPFR fairness-gain weight (default: 1.0)
+--fair_acc_budget FLOAT   Max calibration accuracy drop for LPFR (default: 0.02)
 ```
 
 ### CART
@@ -131,13 +136,24 @@ bash scripts/train.sh --model resplit --dataset adult --num_prefix 30 --depth 5 
 bash scripts/train.sh --model cart --dataset acsincome --fair
 bash scripts/train.sh --model split --dataset adult --depth 5 --fair
 
+# Leaf-Pareto Fair Recalibration (LPFR)
+bash scripts/train.sh --model split --dataset adult --depth 5 --fair \
+  --fair_post leaf_pareto --fair_metric dp --fair_acc_budget 0.03
+
 # Only evaluate (no preprocessing)
 bash scripts/train.sh --model split --dataset adult --depth 5
 ```
 
 When `--fair` is enabled:
 1. **Preprocessing**: sensitive columns (sex, race, etc.) are dropped from features before training.
-2. **Postprocessing**: per-group prediction thresholds are calibrated to equalize positive prediction rates (demographic parity).
+2. **Postprocessing**: the default `--fair_post sample` method calibrates per-group hard predictions to equalize positive prediction rates (demographic parity).
+
+`--fair_post leaf_pareto` enables **Leaf-Pareto Fair Recalibration (LPFR)**.
+LPFR freezes the trained tree structure and learns leaf-level prediction overrides
+on the training split used as a calibration set. It optimizes a Pareto trade-off
+between fairness gain (`--fair_metric dp` or `eo`) and calibration accuracy loss
+(`--fair_acc_budget`), so the deployed model remains a tree: each test sample only
+needs its leaf path and does not require `y_true` or random sample-level flips.
 
 Output includes per-group accuracy, positive prediction rate, statistical parity difference,
 disparate impact ratio, and equal opportunity difference — before and after calibration.
@@ -196,7 +212,7 @@ the fairness panel simply reports under that name — functionality is unaffecte
 Training logs are saved to `results/` with the naming scheme:
 
 ```
-results/{model}-{dataset}-d{depth}-{bin/raw}-{fair/nofair}.log
+results/{model}-{dataset}-d{depth}-{bin/raw}-{nofair/fair/lpfr}.log
 ```
 
 Each log contains the model parameters, test accuracy, majority baseline,
@@ -222,6 +238,33 @@ python scripts/eval_multi_seed.py \
   --seeds 0,1,2,3,4 \
   --run_name full-eval-5seeds
 ```
+
+By default, the full grid includes the `nofair` baseline, original `--fair`
+sample-level calibration (`mode=fair`), and LPFR (`mode=lpfr`). To compare only
+the two fair postprocessors:
+
+```bash
+python scripts/eval_multi_seed.py \
+  --seeds 0,1,2,3,4 \
+  --jobs 8 \
+  --dataset_jobs 3 \
+  --heavy_datasets acsincome \
+  --heavy_dataset_jobs 1 \
+  --datasets adult,bank,compass \
+  --skip_nofair \
+  --fair_posts sample,leaf_pareto \
+  --fair_metric dp \
+  --fair_acc_budget 0.03 \
+  --run_name fair-vs-lpfr-5seeds
+```
+
+`--jobs` controls how many experiment/seed training processes run concurrently.
+`--dataset_jobs` limits concurrent tasks for the same dataset, which avoids
+multiple ACSIncome/folktables jobs downloading or loading the same large data at
+once. The convenience shell script uses 32 global workers, `DATASET_JOBS=3` for
+ordinary datasets, and `HEAVY_DATASET_JOBS=1` for `acsincome` by default.
+Override with `JOBS=16 DATASET_JOBS=2 HEAVY_DATASET_JOBS=1 bash scripts/eval.sh`
+when memory, I/O, or CPU contention is too high.
 
 Each multi-seed run writes:
 
