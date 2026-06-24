@@ -2,7 +2,7 @@
 
 
 class SPLITLeaf:
-    """Leaf node for SPLIT trees — stores a class prediction and loss."""
+    """Leaf node for SPLIT trees - stores a class prediction and loss."""
 
     __slots__ = ("prediction", "loss")
 
@@ -24,7 +24,7 @@ class SPLITLeaf:
 
 
 class SPLITNode:
-    """Internal node for SPLIT trees — stores a binary feature index and
+    """Internal node for SPLIT trees - stores a binary feature index and
     pointers to left (feature == True) and right (feature == False) children."""
 
     __slots__ = ("feature", "left_child", "right_child")

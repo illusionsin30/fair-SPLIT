@@ -132,6 +132,7 @@ def parse_fair_posts(value: str) -> List[str]:
     return fair_posts
 
 
+<<<<<<< HEAD
 def _default_jobs() -> int:
     """Return default parallelism from EVAL_JOBS or CPU count."""
     env_jobs = os.environ.get("EVAL_JOBS")
@@ -140,6 +141,8 @@ def _default_jobs() -> int:
     return 32
 
 
+=======
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run full-grid multi-seed evaluation."""
     parser = build_parser()
@@ -193,10 +196,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "models": MODEL_ORDER,
             "modes": _selected_modes(args),
             "fair_posts": args.fair_posts,
+<<<<<<< HEAD
             "jobs": args.jobs,
             "dataset_jobs": args.dataset_jobs,
             "heavy_datasets": args.heavy_datasets,
             "heavy_dataset_jobs": args.heavy_dataset_jobs,
+=======
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
             "n_failures": len(failures),
         },
         "results": per_seed,
@@ -288,6 +294,7 @@ def _selected_modes(args: argparse.Namespace) -> List[str]:
     return modes
 
 
+<<<<<<< HEAD
 def _init_result_slot(per_seed: Dict[str, Any], experiment: Dict[str, Any]) -> None:
     """Ensure per_seed contains the nested keys for an experiment."""
     per_seed.setdefault(experiment["display_model"], {}).setdefault(
@@ -401,6 +408,8 @@ def _record_outcome(
         print(f"[eval-multi-seed] failed {display_model}/{dataset}/{mode}/seed{seed}")
 
 
+=======
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
 def _aggregate_full_grid(per_seed: Dict[str, Any]) -> Dict[str, Any]:
     """Aggregate model/dataset/mode seed dictionaries."""
     summary = {}

@@ -1,11 +1,4 @@
-"""Binarization utilities: convert numeric/categorical features to binary.
-
-Supports two strategies:
-  - NumericBinarizer: lossless midpoint-based threshold binarization.
-    Each continuous feature with K unique values produces K-1 binary columns.
-  - ThresholdGuessBinarizer: GBDT-guided threshold selection for a compact
-    binarization (fewer columns, but lossy).
-"""
+"""Binarization utilities."""
 
 import numpy as np
 import pandas as pd
@@ -22,9 +15,9 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
     """Binarize mixed-type DataFrames to a single binary matrix.
 
     - Numeric columns: midpoint-threshold binarization.
-      Feature [1, 3, 7] → two binary cols "x <= 2.0", "x <= 5.0".
+      Feature [1, 3, 7] -> two binary cols "x <= 2.0", "x <= 5.0".
     - String / categorical columns: one-hot encoding.
-      Feature ["A","B","A"] → two binary cols "x=A", "x=B".
+      Feature ["A","B","A"] -> two binary cols "x=A", "x=B".
 
     This is a lossless transform for numeric features; the original values
     can be recovered via inverse_transform (numeric columns only).
@@ -40,25 +33,11 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
     """
 
     def __init__(self, max_thresholds=50):
-        """Args:
-            max_thresholds: Maximum midpoints per numeric feature.
-                Features with more unique values get a uniform subsample
-                to prevent feature explosion (e.g. fnlwgt with 30K+
-                unique values would otherwise create 30K+ binary columns).
-        """
+        """Max midpoints per numeric feature."""
         self.max_thresholds = max_thresholds
 
     def fit(self, X, y=None, columns=None):
-        """Fit the binarizer on a potentially mixed-type DataFrame.
-
-        Args:
-            X: array-like (DataFrame or ndarray).
-            y: Ignored.
-            columns: Optional feature name list.
-
-        Returns:
-            self
-        """
+        """Fit the binarizer."""
         self.feature_names_in_ = columns
         if hasattr(X, "columns"):
             self.feature_names_in_ = list(X.columns)
@@ -83,7 +62,6 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
             if pd.api.types.is_numeric_dtype(col):
                 self._numeric_cols_.append(i)
                 unique_vals = np.unique(col.dropna().values.astype(np.float64))
-                # Subsample thresholds if too many unique values
                 if self.max_thresholds and len(unique_vals) > self.max_thresholds + 1:
                     indices = np.linspace(
                         0, len(unique_vals) - 1,
@@ -97,7 +75,6 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
                 self._string_categories_.append(cats)
 
         self.n_features_in_ = len(self.feature_names_in_)
-        # Output width = numeric binarizations + one-hot categories
         num_width = sum(max(len(vals) - 1, 0) for vals in self.column_values_)
         cat_width = sum(len(cats) for cats in self._string_categories_)
         self.n_features_out_ = num_width + cat_width
@@ -108,14 +85,12 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
         check_is_fitted(self, ["n_features_in_", "_numeric_cols_", "_string_cols_",
                                "column_values_", "_string_categories_"])
         names = []
-        # Numeric
         for idx, vals in zip(self._numeric_cols_, self.column_values_):
             base = self.feature_names_in_[idx]
             if len(vals) <= 1:
                 continue
             for hp in _halfway_points(vals):
                 names.append(f"{base} <= {hp}")
-        # String
         for idx, cats in zip(self._string_cols_, self._string_categories_):
             base = self.feature_names_in_[idx]
             for cat in cats:
@@ -141,7 +116,6 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
 
         blocks = []
 
-        # Numeric columns
         for idx, vals in zip(self._numeric_cols_, self.column_values_):
             col = X_df.iloc[:, idx].values.astype(np.float64)
             if len(vals) <= 1:
@@ -149,7 +123,6 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
             for hp in _halfway_points(vals):
                 blocks.append((col <= hp).astype(np.float64))
 
-        # String columns
         for idx, cats in zip(self._string_cols_, self._string_categories_):
             col = X_df.iloc[:, idx].values.astype(str)
             for cat in cats:
@@ -160,18 +133,10 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
         return np.column_stack(blocks)
 
     def inverse_transform(self, Xt):
-        """Recover approximate original numeric values (numeric columns only).
-
-        Args:
-            Xt: array-like of shape (n_samples, n_features_out_).
-
-        Returns:
-            X: ndarray of shape (n_samples, len(_numeric_cols_)).
-        """
+        """Recover approximate original numeric values."""
         check_is_fitted(self, ["_numeric_cols_", "column_values_"])
         Xt_arr = np.asarray(Xt, dtype=np.float64)
 
-        # We only recover numeric columns; one-hot strings are lossy.
         num_width = sum(max(len(v) - 1, 0) for v in self.column_values_)
         Xt_num = Xt_arr[:, :num_width]
 
@@ -191,7 +156,7 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
         return X
 
     def feature_map(self):
-        """Return a dict mapping original feature index -> list of binarized column indices."""
+        """Map original feature index to binarized columns."""
         check_is_fitted(self, ["n_features_in_", "_numeric_cols_", "_string_cols_",
                                "column_values_", "_string_categories_"])
         ret = {}
@@ -210,21 +175,7 @@ class NumericBinarizer(BaseEstimator, TransformerMixin):
 
 
 class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
-    """Binarize numeric features using thresholds from a GBDT ensemble.
-
-    This is a *lossy* but compact binarization — typically far fewer columns
-    than NumericBinarizer.  Based on:
-      "Fast Sparse Decision Tree Optimization via Reference Ensembles"
-      (https://doi.org/10.1609/aaai.v36i9.21194)
-
-    Args:
-        n_estimators: Number of GBDT trees.
-        max_depth: Maximum depth of each GBDT tree.
-        learning_rate: GBDT learning rate.
-        random_state: Random seed.
-        column_elimination: If True, iteratively drop the least important
-            threshold while GBDT score does not degrade.
-    """
+    """Binarize numeric features using thresholds from a GBDT ensemble."""
 
     def __init__(
         self,
@@ -241,30 +192,13 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
         self.column_elimination = column_elimination
 
     def fit(self, X, y, columns=None):
-        """Fit GBDT stumps and extract discriminative thresholds.
-
-        Handles mixed-type DataFrames: numeric columns go through GBDT
-        threshold guessing; string columns are one-hot encoded.
-
-        Follows the SPLIT paper: each GBDT estimator is a stump (max_depth=1),
-        thresholds are ordered by Gini importance, and the least important
-        thresholds are iteratively dropped until accuracy degrades.
-
-        Args:
-            X: array-like (DataFrame or ndarray).
-            y: array-like of target labels.
-            columns: Optional feature name list.
-
-        Returns:
-            self
-        """
+        """Fit GBDT stumps and extract thresholds."""
         from sklearn.ensemble import GradientBoostingClassifier
 
         self.feature_names_in_ = columns
         if hasattr(X, "columns"):
             self.feature_names_in_ = list(X.columns)
 
-        # Convert to DataFrame for dtype-aware processing
         if hasattr(X, "iloc"):
             X_df = X
         else:
@@ -273,7 +207,6 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
         if self.feature_names_in_ is None:
             self.feature_names_in_ = [f"x{i}" for i in range(X_df.shape[1])]
 
-        # Separate numeric and string columns
         num_cols = []
         str_cols = []
         for i, col_name in enumerate(self.feature_names_in_):
@@ -287,14 +220,12 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
         if str_cols:
             print(f"    categorical: {[self.feature_names_in_[i] for i in str_cols]}")
 
-        num_names = [self.feature_names_in_[i] for i in num_cols]
         self._str_cols_ = str_cols
         self._str_categories_ = []
         for i in str_cols:
             cats = sorted(X_df.iloc[:, i].dropna().unique())
             self._str_categories_.append(cats)
 
-        # --- GBDT stump threshold guessing on numeric columns only ---
         if num_cols:
             X_num = X_df.iloc[:, num_cols].values.astype(np.float64)
         else:
@@ -304,14 +235,11 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
             loss="log_loss",
             learning_rate=self.learning_rate,
             n_estimators=self.n_estimators,
-            max_depth=self.max_depth,        # 1 = stumps (paper default)
+            max_depth=self.max_depth,
             random_state=self.random_state,
         )
         gbdt.fit(X_num, y)
 
-        # Collect thresholds per numeric feature from all GBDT stumps.
-        # estimators_ is (n_estimators, n_classes-1); for binary it's
-        # (n_estimators, 1) → ravel to 1D.
         thresholds = []
         for local_j, global_j in enumerate(num_cols):
             th_j = []
@@ -322,11 +250,9 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
             for th in th_j:
                 thresholds.append((global_j, th))
 
-        # Build global→local index mapping for numeric columns
         global_to_local = {global_j: local_j
                            for local_j, global_j in enumerate(num_cols)}
 
-        # Column elimination by Gini importance (paper algorithm)
         if self.column_elimination and thresholds:
             self.thresholds_ = self._column_elimination(
                 X_num, y, thresholds, gbdt, global_to_local,
@@ -339,14 +265,7 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
-        """Apply threshold binarization + one-hot encoding.
-
-        Args:
-            X: array-like of shape (n_samples, n_original_features).
-
-        Returns:
-            X_bin: ndarray of shape (n_samples, n_features_out_), {0, 1}.
-        """
+        """Apply threshold binarization and one-hot encoding."""
         check_is_fitted(self, ["thresholds_", "_str_cols_", "_str_categories_"])
 
         if hasattr(X, "iloc"):
@@ -355,12 +274,10 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
             X_df = pd.DataFrame(X, columns=self.feature_names_in_)
 
         blocks = []
-        # Numeric thresholds
         for j, th in self.thresholds_:
             col_vals = X_df.iloc[:, j].values.astype(np.float64)
             blocks.append((col_vals <= th).astype(np.float64))
 
-        # String one-hot
         for idx, cats in zip(self._str_cols_, self._str_categories_):
             col_str = X_df.iloc[:, idx].values.astype(str)
             for cat in cats:
@@ -384,7 +301,7 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
         return np.array(names)
 
     def feature_map(self):
-        """Return mapping from original feature index to binarized column indices."""
+        """Map original feature index to binarized columns."""
         check_is_fitted(self, ["thresholds_", "_str_cols_", "_str_categories_"])
         ret = {}
         idx = 0
@@ -398,29 +315,17 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
 
     @staticmethod
     def _threshold(estimator, feature):
-        """Extract all thresholds used for a given feature in one GBDT tree."""
+        """Extract thresholds used for a feature."""
         f = estimator.tree_.feature
         t = estimator.tree_.threshold
         return t[f == feature]
 
     def _column_elimination(self, X_num, y, thresholds, gbdt, global_to_local):
-        """Eliminate least-important thresholds by Gini importance.
-
-        Implementation of the paper's algorithm:
-          1. Binarize X using ALL collected thresholds.
-          2. Fit GBDT on the binarized features to get Gini importance.
-          3. Iteratively remove the least important threshold column,
-             re-fit GBDT, and stop when accuracy degrades.
-
-        Args:
-            X_num: (n, p) numeric-only feature matrix.
-            global_to_local: dict mapping original column index → X_num index.
-        """
+        """Eliminate thresholds by importance."""
         th = list(thresholds)
         if len(th) <= 1:
             return th
 
-        # Binarize X according to all thresholds (j=global, map to local)
         X_thr = np.column_stack([
             (X_num[:, global_to_local[j]] <= val).astype(np.float64)
             for j, val in th
@@ -443,10 +348,9 @@ class ThresholdGuessBinarizer(BaseEstimator, TransformerMixin):
             curr_score = gbdt.score(X_thr, y)
             n_iter += 1
 
-        # Restore the last removed threshold (the one that caused accuracy drop)
         if last_dropped is not None:
             th.append(last_dropped[1])
 
         print(f"  [ThresholdGuess] {len(thresholds)} thresholds"
-              f" → {len(th)} kept ({n_iter} eliminated)")
+              f" -> {len(th)} kept ({n_iter} eliminated)")
         return th

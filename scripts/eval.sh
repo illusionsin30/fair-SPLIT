@@ -15,10 +15,13 @@ RUN_NAME="${RUN_NAME:-full-12datasets-nofair-fair-lpfr-5seeds}"
 FAIR_METRIC="${FAIR_METRIC:-dp}"
 FAIR_ACC_BUDGET="${FAIR_ACC_BUDGET:-0.03}"
 FAIR_LAMBDA="${FAIR_LAMBDA:-1.0}"
+<<<<<<< HEAD
 JOBS="${JOBS:-32}"
 DATASET_JOBS="${DATASET_JOBS:-3}"
 HEAVY_DATASETS="${HEAVY_DATASETS:-acsincome}"
 HEAVY_DATASET_JOBS="${HEAVY_DATASET_JOBS:-1}"
+=======
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
 
 DATASETS="adult,bank,compass,german,heloc,spambase,covertype,thyroid,communities,heart,lawschool,acsincome"
 
@@ -26,10 +29,13 @@ cd "${ROOT_DIR}"
 
 python scripts/eval_multi_seed.py \
   --seeds "${SEEDS}" \
+<<<<<<< HEAD
   --jobs "${JOBS}" \
   --dataset_jobs "${DATASET_JOBS}" \
   --heavy_datasets "${HEAVY_DATASETS}" \
   --heavy_dataset_jobs "${HEAVY_DATASET_JOBS}" \
+=======
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
   --datasets "${DATASETS}" \
   --fair_posts sample,leaf_pareto \
   --fair_metric "${FAIR_METRIC}" \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# train.sh — Unified launcher for src.train
+# train.sh - Unified launcher for src.train
 #
 # Usage:
 #   bash scripts/train.sh --model cart  --dataset compass

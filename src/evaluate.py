@@ -1,18 +1,9 @@
-# ============================================================
-# Evaluation utilities for CART models
-# ============================================================
 import numpy as np
 from sklearn.metrics import accuracy_score, mean_squared_error, r2_score
 
 
 def evaluate_classification(y_true, y_pred, y_train):
-    """Print classification metrics: accuracy and majority-class baseline.
-
-    Args:
-        y_true: Ground-truth labels for the test set.
-        y_pred: Predicted labels from the model.
-        y_train: Training labels (used for majority-class baseline).
-    """
+    """Print classification metrics."""
     acc = accuracy_score(y_true, y_pred)
     print(f"Test accuracy:           {acc:.4f}")
 
@@ -22,13 +13,7 @@ def evaluate_classification(y_true, y_pred, y_train):
 
 
 def evaluate_regression(y_true, y_pred, y_train):
-    """Print regression metrics: RMSE, R^2, and mean-prediction baseline.
-
-    Args:
-        y_true: Ground-truth target values for the test set.
-        y_pred: Predicted values from the model.
-        y_train: Training target values (used for mean-prediction baseline).
-    """
+    """Print regression metrics."""
     rmse = mean_squared_error(y_true, y_pred) ** 0.5
     r2 = r2_score(y_true, y_pred)
     print(f"Test RMSE: {rmse:.2f}  R^2: {r2:.4f}")
@@ -39,38 +24,18 @@ def evaluate_regression(y_true, y_pred, y_train):
     print(f"Mean-prediction baseline RMSE: {baseline_rmse:.2f}")
 
 
-# ============================================================
-# Fairness metrics
-# ============================================================
-
 def evaluate_fairness(y_true, y_pred, sensitive, name="sensitive"):
-    """Print group-level accuracy and fairness metrics.
-
-    Args:
-        y_true: Ground-truth labels (binary 0/1).
-        y_pred: Predicted labels (binary 0/1).
-        sensitive: Array of sensitive-attribute values (e.g. sex, race).
-        name: Human-readable name for the sensitive attribute.
-
-    Metrics reported:
-      - Per-group accuracy
-      - Positive prediction rate  P(ŷ = 1 | group)
-      - Statistical parity difference (max - min positive rate)
-      - Equal opportunity difference  (TPR gap)
-      - Disparate impact ratio  (min_rate / max_rate)
-    """
+    """Print group-level accuracy and fairness metrics."""
     groups = sorted(np.unique(sensitive))
     n_groups = len(groups)
     if n_groups < 2:
-        print(f"  [Fairness] {name}: only 1 group — fairness N/A")
+        print(f"  [Fairness] {name}: only 1 group - fairness N/A")
         return
 
-    # Auto-discretize continuous-valued attributes (e.g. age) that produce
-    # too many small groups.  Bin by quartile boundaries into 4 groups.
     MAX_UNIQUE_GROUPS = 10
     if n_groups > MAX_UNIQUE_GROUPS:
         import pandas as _pd
-        print(f"  [Fairness] {name}: {n_groups} unique values → "
+        print(f"  [Fairness] {name}: {n_groups} unique values -> "
               f"discretizing into 4 quartile-based groups")
         _binned, _bins = _pd.qcut(sensitive, q=4, duplicates="drop", retbins=True)
         labels = [f"{_bins[i]:.1f}-{_bins[i+1]:.1f}"
@@ -80,13 +45,13 @@ def evaluate_fairness(y_true, y_pred, sensitive, name="sensitive"):
         groups = sorted(np.unique(sensitive))
         n_groups = len(groups)
 
-    print(f"\nFairness — {name}:")
+    print(f"\nFairness - {name}:")
     print(f"{'Group':>16s}  {'n':>6s}  {'Acc':>8s}  {'PosRate':>8s}")
     print("-" * 48)
 
     rates = {}
     tprs = {}
-    min_sample = 50  # skip groups below this size for fairness metrics
+    min_sample = 50
     small_groups = []
     for g in groups:
         mask = sensitive == g
@@ -105,7 +70,6 @@ def evaluate_fairness(y_true, y_pred, sensitive, name="sensitive"):
 
     print("-" * 48)
 
-    # Exclude small groups for fairness metrics
     large_rates = {g: v for g, v in rates.items()
                    if (sensitive == g).sum() >= min_sample}
     if small_groups:
@@ -115,17 +79,14 @@ def evaluate_fairness(y_true, y_pred, sensitive, name="sensitive"):
         print(f"  Too few large groups for fairness comparison.")
         return
 
-    # Statistical parity difference
     spd = max(large_rates.values()) - min(large_rates.values())
     print(f"  Statistical parity diff:  {spd:.4f}  (max - min pos rate)")
 
-    # Disparate impact
     max_rate = max(large_rates.values())
     min_rate = min(large_rates.values())
     di = min_rate / max_rate if max_rate > 0 else float("nan")
     print(f"  Disparate impact ratio:   {di:.4f}  (<0.8 usually unfair)")
 
-    # Equal opportunity difference
     large_tprs = {g: v for g, v in tprs.items()
                   if not np.isnan(v) and (sensitive == g).sum() >= min_sample}
     if len(large_tprs) >= 2:

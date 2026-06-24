@@ -3,7 +3,7 @@
 
 Reads ``../results/.done_experiments`` to discover completed experiments,
 parses each corresponding ``*.log`` file, and writes a single
-``../results/all_results.json`` organised by model → dataset → mode.
+``../results/all_results.json`` organised by model -> dataset -> mode.
 
 Log filename convention (set by ``src/train.py:_make_filename``)::
 
@@ -65,7 +65,7 @@ OUT_FILE_FAIR = os.path.join(RESULTS_DIR, "all_results_fair.json")
 OUT_FILE_LPFR = os.path.join(RESULTS_DIR, "all_results_lpfr.json")
 
 # ---------------------------------------------------------------------------
-# Sensitive-attribute map — kept in sync with src/train.py
+# Sensitive-attribute map - kept in sync with src/train.py
 # ---------------------------------------------------------------------------
 SENSITIVE_ATTRS = {
     "adult":      ["sex", "race"],
@@ -86,16 +86,23 @@ MODEL_ORDER = ["cart", "split-greedy", "split-optimal", "resplit"]
 
 
 # ---------------------------------------------------------------------------
-# Single-log parser — scans lines once and extracts everything.
+# Single-log parser - scans lines once and extracts everything.
 # ---------------------------------------------------------------------------
 
+<<<<<<< HEAD
 # Match lines like "Fairness — sex:", "Fairness — sex (calibrated):",
 # or "Fairness — sex (LPFR):".
 _FAIR_BLOCK_HEADER = re.compile(
     r"^Fairness — (?P<attr>.+?)(?: \((?P<post>calibrated|LPFR)\))?:$"
+=======
+# Match lines like "Fairness - sex:", "Fairness - sex (calibrated):",
+# or "Fairness - sex (LPFR):".
+_FAIR_BLOCK_HEADER = re.compile(
+    r"^Fairness - (?P<attr>.+?)(?: \((?P<post>calibrated|LPFR)\))?:$"
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
 )
 
-# Metric patterns — use .search() so leading whitespace doesn't matter.
+# Metric patterns - use .search() so leading whitespace doesn't matter.
 _RE_TEST_ACC = re.compile(r"Test accuracy:\s+([\d.]+)")
 _RE_MAJ_BL = re.compile(r"Majority-class baseline:\s+([\d.]+)")
 _RE_TIME = re.compile(r"Training time:\s+([\d.]+)s")
@@ -106,12 +113,21 @@ _RE_EO_DIFF = re.compile(r"Equal opportunity diff:\s+([\d.]+)")
 
 def _parse_post_acc(line):
     """Return postprocessor accuracy key/value from a line like
+<<<<<<< HEAD
     '  Calibrated accuracy: 0.8489 (was 0.8442, Δ=+0.0046)' or
     '  LPFR accuracy: 0.8489 (was 0.8442, Δ=+0.0046)'.
     Returns None if the line doesn't match.
     """
     m = re.search(
         r"(Calibrated|LPFR) accuracy:\s+([\d.]+)\s+\(was\s+[\d.]+\s*,\s*Δ=.+\)",
+=======
+    '  Calibrated accuracy: 0.8489 (was 0.8442, delta=+0.0046)' or
+    '  LPFR accuracy: 0.8489 (was 0.8442, delta=+0.0046)'.
+    Returns None if the line doesn't match.
+    """
+    m = re.search(
+        r"(Calibrated|LPFR) accuracy:\s+([\d.]+)\s+\(was\s+[\d.]+\s*,\s*delta=.+\)",
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
         line,
     )
     if not m:
@@ -142,7 +158,11 @@ def parse_log(filepath, dataset):
         elif (m := _RE_TIME.search(line)):
             result["training_time_s"] = float(m.group(1))
 
+<<<<<<< HEAD
     # Detect fair mode — look for any fairness post/pre-processing marker.
+=======
+    # Detect fair mode - look for any fairness post/pre-processing marker.
+>>>>>>> 118e9fb (Refactor: clean up comments and docs.)
     for line in lines:
         if ("FairPreprocess" in line or "FairCalibrate" in line or
                 "LeafPareto" in line or "LPFR accuracy" in line):
@@ -221,7 +241,7 @@ _LOG_PATTERN_CACHE = {}
 
 
 def _find_log_file(model, dataset, mode):
-    """Find the log file for ``model`` × ``dataset`` × ``mode``."""
+    """Find the log file for ``model`` x ``dataset`` x ``mode``."""
     cache_key = (model, dataset, mode)
     if cache_key in _LOG_PATTERN_CACHE:
         pat = _LOG_PATTERN_CACHE[cache_key]
@@ -253,7 +273,7 @@ def _round(obj):
 
 
 def _order_output(raw):
-    """Sort by MODEL_ORDER × DATASET_ORDER."""
+    """Sort by MODEL_ORDER x DATASET_ORDER."""
     ordered = {}
     for model in MODEL_ORDER:
         if model in raw:

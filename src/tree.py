@@ -1,16 +1,4 @@
-# ============================================================
-# Unified CART (classification + regression) — from scratch
-# ============================================================
-# A single tree class parameterised by `task`:
-#   - "classification": Gini impurity, majority-vote leaves, supports
-#                       binary AND multiclass targets.
-#   - "regression":     variance impurity (MSE), mean-value leaves.
-#
-# Categorical splits use Breiman's classical shortcut:
-#   * Binary classification: sort categories by P(y=1 | category)
-#   * Regression:            sort categories by E[y | category]
-#   * Multiclass:            no closed-form prefix shortcut, so we either
-#                            brute-force subsets when K is small, or skip.
+"""CART and SPLIT-family tree implementations."""
 
 from itertools import combinations
 
@@ -19,7 +7,7 @@ import pandas as pd
 
 
 class Node:
-    """A single tree node — either internal (with a split) or a leaf."""
+    """Tree node."""
 
     __slots__ = (
         "feature",
@@ -38,7 +26,7 @@ class Node:
         self.left_categories = None
         self.left = None
         self.right = None
-        self.prediction = None  # class label OR mean target value
+        self.prediction = None
 
 
 class CART:
@@ -61,13 +49,10 @@ class CART:
         self.min_samples_leaf = min_samples_leaf
         self.numeric_features = list(numeric_features or [])
         self.categorical_features = list(categorical_features or [])
-        # If a categorical feature has more distinct levels than this and the
-        # problem is multiclass, we skip it rather than enumerate 2^K subsets.
         self.max_cat_brute_force = max_cat_brute_force
         self.root = None
-        self._classes = None  # populated in fit() for classification
+        self._classes = None
 
-    # ---------- Impurity ----------
     def _impurity(self, y):
         """Gini for classification, variance for regression."""
         if len(y) == 0:
@@ -76,7 +61,6 @@ class CART:
             _, counts = np.unique(y, return_counts=True)
             p = counts / counts.sum()
             return 1.0 - np.sum(p * p)
-        # regression: population variance acts as MSE around the mean
         return float(np.var(y))
 
     def _weighted_impurity(self, y_left, y_right):
@@ -85,16 +69,14 @@ class CART:
             len(y_right) / n
         ) * self._impurity(y_right)
 
-    # ---------- Leaf prediction ----------
     def _leaf_value(self, y):
         if self.task == "classification":
             vals, counts = np.unique(y, return_counts=True)
             if len(counts) == 0:
-                return 0  # fallback for empty node
+                return 0
             return vals[np.argmax(counts)]
         return float(np.mean(y))
 
-    # ---------- Numeric split ----------
     def _best_numeric_split(self, column, y):
         """Sweep candidate thresholds in O(N log N).
 
@@ -140,7 +122,6 @@ class CART:
                     best_gain = gain
                     best_threshold = (v_sorted[i - 1] + v_sorted[i]) / 2.0
         else:
-            # Regression: variance via cumulative sum and sum-of-squares.
             cs = np.concatenate([[0.0], np.cumsum(y_sorted)])
             css = np.concatenate([[0.0], np.cumsum(y_sorted * y_sorted)])
             total_s, total_ss = cs[-1], css[-1]
@@ -160,14 +141,8 @@ class CART:
                     best_threshold = (v_sorted[i - 1] + v_sorted[i]) / 2.0
         return best_gain, best_threshold
 
-    # ---------- Categorical split ----------
     def _ordered_categories(self, values, y, categories):
-        """Order categories so the optimal split is some prefix.
-
-        - Binary classification: order by P(y=1 | category)
-        - Regression:            order by E[y | category]
-        Both are Breiman's provably-optimal orderings.
-        """
+        """Order categories by target mean."""
         keys = []
         for c in categories:
             mask = values == c
@@ -186,23 +161,17 @@ class CART:
         )
         is_regression = self.task == "regression"
 
-        # Candidate "left" subsets to try.
         if is_binary_clf or is_regression:
             sorted_cats = self._ordered_categories(values, y, categories)
-            # Optimal split is a prefix of the sorted order — O(K log K).
             candidate_left_sets = [
                 set(sorted_cats[:k]) for k in range(1, len(sorted_cats))
             ]
         else:
-            # Multiclass: brute-force all non-trivial subsets when small,
-            # otherwise skip to keep training tractable.
             K = len(categories)
             if K > self.max_cat_brute_force:
                 return 0.0, None
             cat_list = list(categories)
             candidate_left_sets = []
-            # Enumerate halves once (a subset and its complement give the
-            # same partition, so we stop at K/2).
             for r in range(1, K // 2 + 1):
                 for combo in combinations(cat_list, r):
                     candidate_left_sets.append(set(combo))
@@ -247,11 +216,8 @@ class CART:
                 }
         return best if best["gain"] > 0 else None
 
-    # ---------- Recursive build ----------
     def _build(self, X, y, depth):
         node = Node()
-        # Stop if pure (classification) / zero-variance (regression),
-        # at depth limit, or below the minimum split size.
         if (
             depth >= self.max_depth
             or len(y) < self.min_samples_split
@@ -285,7 +251,6 @@ class CART:
         node.right = self._build(X_right, y_right, depth + 1)
         return node
 
-    # ---------- Public API ----------
     def fit(self, X, y):
         X = X.reset_index(drop=True)
         y = np.asarray(y)
@@ -297,7 +262,6 @@ class CART:
         return self
 
     def _predict_row(self, row, node):
-        # Leaves are the only nodes with no children.
         if node.left is None:
             return node.prediction
         if node.is_numeric:
@@ -312,30 +276,9 @@ class CART:
         )
 
 
-# Backwards-compatible alias for convenience.
 def CARTClassifier(**kw):
     return CART(task="classification", **kw)
 
-
-# ============================================================
-# SPLIT — SParse Lookahead for Interpretable Trees
-# ============================================================
-# Implements Algorithm 2 from the SPLIT paper:
-#
-#   Phase 1: ModifiedGOSDT (our OptimalTreeSolver) with
-#            get_bounds (Algorithm 1/12) finds the optimal prefix
-#            tree of depth dl, where the boundary condition at
-#            d' == dl sets lb = ub = greedy completion loss.
-#   Phase 2: (optional post-processing)  For each leaf of the
-#            prefix, replace the greedy subtree with an optimal
-#            GOSDT subtree (our solver without lookahead boundary)
-#            using renormalised λ.
-#
-# Reference:
-#   "Fast Sparse Decision Tree Optimization via Reference Ensembles"
-#   (https://doi.org/10.1609/aaai.v36i9.21194)   — AAAI 2022
-#   "Near-Optimal Decision Trees in a SPLIT Second"
-#   — ICML 2025
 
 from .solver import OptimalTreeSolver
 from .builder import GreedyTreeBuilder
@@ -345,39 +288,7 @@ from .utils.binarizer import NumericBinarizer, ThresholdGuessBinarizer
 
 
 class SPLIT:
-    """SPLIT: optimal shallow prefix + filled leaves (Algorithm 2).
-
-    Parameters
-    ----------
-    lookahead_depth : int
-        Depth of the optimal prefix tree (Phase 1, dl in paper).
-        Must be >= 1.  dl=1 means root-level optimisation only.
-    full_depth_budget : int
-        Total depth budget d for the final tree.  0 = no limit.
-    reg : float
-        Regularisation penalty λ per leaf (sparsity penalty).
-    time_limit : float
-        Wall-clock time limit (seconds) for the optimal prefix solver.
-    verbose : bool
-        Print progress information.
-    binarize : bool
-        Binarize continuous features before training.
-    binarizer : str
-        "midpoint" (lossless) or "gbdt" (compact).
-    gbdt_n_est : int
-        Number of GBDT trees (only for "gbdt" binarizer).
-    gbdt_max_depth : int
-        Max depth of each GBDT tree.
-    leaf_fill : str
-        Strategy for filling prefix leaves —
-        "greedy" (fast, Algorithm 4) or "optimal" (slower, GOSDT).
-    max_features : int
-        Top-K candidate features (0 = all).
-    max_thresholds : int
-        Max midpoints per numeric feature.
-    random_state : int
-        Random seed.
-    """
+    """SPLIT tree builder."""
 
     def __init__(
         self,
@@ -398,12 +309,12 @@ class SPLIT:
         if lookahead_depth < 1:
             raise ValueError(
                 f"lookahead_depth must be >= 1, got {lookahead_depth}. "
-                "A value of 0 means no lookahead (use a plain greedy tree instead)."
+                "Use a positive lookahead depth."
             )
 
-        self.lookahead_depth = lookahead_depth          # dl
-        self.full_depth_budget = full_depth_budget       # d
-        self.reg = reg                                   # λ
+        self.lookahead_depth = lookahead_depth
+        self.full_depth_budget = full_depth_budget
+        self.reg = reg
         self.time_limit = time_limit
         self.verbose = verbose
         self.binarize_flag = binarize
@@ -415,35 +326,23 @@ class SPLIT:
         self.max_thresholds = max_thresholds
         self.random_state = random_state
 
-        # Derived
         self._has_no_depth_limit = full_depth_budget == 0
         if self._has_no_depth_limit:
-            self._remaining_depth = 0   # unlimited in practice
+            self._remaining_depth = 0
         else:
             self._remaining_depth = full_depth_budget - lookahead_depth
 
         self.classes_ = None
         self.tree = None
         self._enc = None
-        self._n_total = 0    # global N for loss normalisation
-
-    # ------------------------------------------------------------------
-    # fit / predict
-    # ------------------------------------------------------------------
+        self._n_total = 0
 
     def fit(self, X, y):
-        """Train SPLIT (Algorithm 2).
-
-        Parameters
-        ----------
-        X : DataFrame or ndarray of features.
-        y : array-like of binary labels {0, 1}.
-        """
+        """Train SPLIT."""
         y = np.asarray(y, dtype=np.int64)
         self.classes_ = np.unique(y).tolist()
-        self._n_total = len(y)          # global N
+        self._n_total = len(y)
 
-        # Binarization
         if self.binarize_flag:
             X_bin = self._binarize_fit_transform(X, y)
             if self._enc is not None:
@@ -454,13 +353,6 @@ class SPLIT:
             X_bin = np.asarray(X, dtype=bool)
             self.feature_names_ = [f"f{i}" for i in range(X_bin.shape[1])]
 
-        # ----------------------------------------------------------------
-        # Phase 1: optimal prefix via DP with greedy boundary
-        # (Algorithm 2, lines 1-2)
-        #
-        # ModifiedGOSDT with get_bounds: at lookahead depth dl,
-        # bounds are set to greedy completion loss.
-        # ----------------------------------------------------------------
         prefix_solver = OptimalTreeSolver(
             depth_budget=self.lookahead_depth,
             reg=self.reg,
@@ -470,7 +362,6 @@ class SPLIT:
             global_N=self._n_total,
         )
 
-        # Greedy upper bound for DP pruning (optional but speeds things up)
         greedy_tree, greedy_loss_sub = GreedyTreeBuilder(
             depth_budget=self.full_depth_budget,
             reg=self.reg,
@@ -490,13 +381,6 @@ class SPLIT:
         print(f"[SPLIT] Optimal prefix loss: {prefix_loss:.6f}, "
               f"leaves: {prefix_leaves}")
 
-        # ----------------------------------------------------------------
-        # Phase 2: post-processing (Algorithm 2, lines 3-9)
-        #
-        # For each leaf of the prefix, replace with optimal subtree.
-        # Depth is tracked from the root so each leaf gets
-        # remaining_depth = full_depth_budget - current_depth.
-        # ----------------------------------------------------------------
         if (self._remaining_depth > 0 or self._has_no_depth_limit):
             if self.verbose:
                 print(
@@ -526,10 +410,6 @@ class SPLIT:
              for i in range(len(X_bin))]
         )
 
-    # ------------------------------------------------------------------
-    # Tree utilities
-    # ------------------------------------------------------------------
-
     def tree_to_dict(self):
         """Export the fitted tree as a nested dict."""
         if self.tree is None:
@@ -547,10 +427,6 @@ class SPLIT:
             return "SPLIT(unfitted)"
         return str(self.tree)
 
-    # ------------------------------------------------------------------
-    # Internal: binarization
-    # ------------------------------------------------------------------
-
     def _binarize_fit_transform(self, X, y):
         """Fit a binarizer and return the binary feature matrix."""
         if self.binarizer_type == "gbdt":
@@ -563,23 +439,13 @@ class SPLIT:
             self._enc = NumericBinarizer(max_thresholds=self.max_thresholds)
         return np.asarray(self._enc.fit_transform(X, y), dtype=bool)
 
-    # ------------------------------------------------------------------
-    # Internal: leaf filling (Algorithm 2, lines 3-9)
-    # ------------------------------------------------------------------
-
     def _fill_leaves(self, node, X, y, current_depth):
-        """Recursively replace every leaf with a completed subtree.
-
-        Algorithm 2 lines 3-9: for each prefix leaf at depth du,
-        find an optimal subtree of depth d-du using global-N
-        normalisation with the original λ.
-        """
+        """Fill leaf subtrees."""
         if isinstance(node, SPLITLeaf):
             n_local = len(y)
             if n_local == 0:
                 return node
 
-            # Remaining depth budget for this leaf's subtree.
             remaining_depth = self.full_depth_budget - current_depth
             if self._has_no_depth_limit:
                 remaining_depth = max(remaining_depth, 1)
@@ -596,7 +462,6 @@ class SPLIT:
                 subtree, _ = sub_solver.fit(X, y)
                 return self._remap_tree(subtree, self.classes_)
             else:
-                # Greedy leaf fill — Algorithm 4 with global-N normalisation
                 builder = GreedyTreeBuilder(
                     depth_budget=remaining_depth,
                     reg=self.reg,
@@ -606,7 +471,6 @@ class SPLIT:
                 subtree, _ = builder.build(X, y)
                 return subtree
         else:
-            # Internal node: recurse on children, incrementing depth.
             left_mask = X[:, node.feature]
             right_mask = ~left_mask
             node.left_child = self._fill_leaves(
@@ -621,7 +485,7 @@ class SPLIT:
 
     @staticmethod
     def _remap_tree(node, target_classes):
-        """Ensure leaf predictions use indices into target_classes."""
+        """Remap leaf predictions."""
         if isinstance(node, SPLITLeaf):
             return SPLITLeaf(
                 prediction=int(node.prediction),
@@ -634,61 +498,14 @@ class SPLIT:
         )
 
     def _compute_loss(self, tree, X, y):
-        """Compute L(T, D, λ) = (1/N) Σ errors + λ · num_leaves."""
+        """Compute regularized loss."""
         preds = predict_batch(X, tree, np.array(self.classes_))
         n_err = int(np.sum(preds != y))
         return n_err / self._n_total + self.reg * num_leaves(tree)
 
 
-# ============================================================
-# ReSPLIT — Rashomon set via SPLIT prefixes
-# ============================================================
-# Approximation of Algorithm 5 (RESPLIT) from the paper.
-# Instead of ModifiedTreeFARMS (which requires C++ GOSDT), we:
-#   1. Generate diverse prefix candidates via our DP solver with
-#      a relaxed optimality bound (emulating a subset of TreeFARMS
-#      output — the prefixes whose best greedy completion is
-#      within ε of optimal).
-#   2. For each leaf, use Greedy (Alg 4) to set an upper bound Lg,
-#      then call our DP solver to enumerate multiple near-optimal
-#      subtrees (those with loss ≤ Lg).
-#   3. Filter the cross-product to the Rashomon set.
-#
-# This trades exact TreeFARMS enumeration for our pure-Python BnB,
-# faithfully following the paper's Algorithm 5 structure but with
-# our own solver backend.
-
-
 class ReSPLIT:
-    """Approximate Rashomon set per Algorithm 5 (RESPLIT).
-
-    Parameters
-    ----------
-    lookahead_depth : int
-        Depth of each prefix tree (dl in paper).
-    full_depth_budget : int
-        Total depth budget d.
-    reg : float
-        Regularisation penalty λ per leaf.
-    rashomon_bound_multiplier : float
-        ε — trees with objective ≤ (1+ε)·best_objective are kept.
-    num_prefix_candidates : int
-        Number of diverse prefixes to generate.
-    time_limit : float
-        Per-prefix solver time limit (seconds).
-    verbose : bool
-        Print progress.
-    binarize : bool
-        Binarize continuous features.
-    binarizer : str
-        "midpoint" or "gbdt".
-    max_features : int
-        Top-K candidate features (0 = all).
-    max_thresholds : int
-        Max midpoints per numeric feature.
-    random_state : int
-        Random seed.
-    """
+    """Maintain a candidate tree set."""
 
     def __init__(
         self,
@@ -722,17 +539,13 @@ class ReSPLIT:
         self._has_no_depth_limit = full_depth_budget == 0
 
         self.classes_ = None
-        self.models = []          # list of (tree, objective) tuples
+        self.models = []
         self._enc = None
         self._n_total = 0
         self._rng = np.random.RandomState(random_state)
 
-    # ------------------------------------------------------------------
-    # fit / access
-    # ------------------------------------------------------------------
-
     def fit(self, X, y):
-        """Build the Rashomon set."""
+        """Build the candidate tree set."""
         y = np.asarray(y, dtype=np.int64)
         self.classes_ = np.unique(y).tolist()
         self._n_total = len(y)
@@ -756,23 +569,17 @@ class ReSPLIT:
                 f"prefix candidates..."
             )
 
-        # Generate diverse prefixes by shuffling feature order
-        # (emulates ModifiedTreeFARMS's diverse prefix enumeration)
         for i in range(self.num_prefix_candidates):
             seed = self._rng.randint(0, 2**31 - 1)
             local_rng = np.random.RandomState(seed)
 
-            # Shuffle feature order for diversity
             shuffled_features = all_features.copy()
             local_rng.shuffle(shuffled_features)
 
-            # Build a greedy prefix using the shuffled order
             prefix_tree, _ = self._greedy_prefix(
                 X_bin, y, shuffled_features, self.lookahead_depth
             )
 
-            # For each leaf, get Greedy upper bound Lg (Algorithm 5, line 7)
-            # then enumerate subtree(s) with loss ≤ Lg (Algorithm 5, line 8)
             if self._remaining_depth > 0 or self._has_no_depth_limit:
                 fill_depth = self._remaining_depth
                 full_trees = self._enumerate_completions(
@@ -791,18 +598,16 @@ class ReSPLIT:
         if not candidates:
             raise RuntimeError("No valid trees generated.")
 
-        # Filter to Rashomon set (ε-threshold)
         best_obj = min(obj for _, obj in candidates)
         threshold = best_obj * (1.0 + self.rashomon_bound_multiplier)
         self.models = [
             (tree, obj) for tree, obj in candidates if obj <= threshold
         ]
-        # Sort by objective (best first)
         self.models.sort(key=lambda x: x[1])
 
         if self.verbose:
             print(
-                f"[ReSPLIT] Rashomon set: {len(self.models)} trees "
+                f"[ReSPLIT] candidate tree set: {len(self.models)} trees "
                 f"(best objective: {best_obj:.6f}, threshold: {threshold:.6f})"
             )
 
@@ -812,11 +617,11 @@ class ReSPLIT:
         return len(self.models)
 
     def __getitem__(self, idx):
-        """Return the idx-th tree in the Rashomon set (sorted by quality)."""
+        """Return the idx-th tree."""
         return self.models[idx][0]
 
     def predict(self, X, idx=0):
-        """Predict using the idx-th tree in the Rashomon set."""
+        """Predict using the idx-th tree."""
         if idx >= len(self.models):
             raise IndexError(
                 f"Tree index {idx} out of range (have {len(self.models)} trees)."
@@ -838,10 +643,6 @@ class ReSPLIT:
         """Return the objective value of the idx-th tree."""
         return self.models[idx][1]
 
-    # ------------------------------------------------------------------
-    # Internal: binarization
-    # ------------------------------------------------------------------
-
     def _binarize_fit_transform(self, X, y):
         if self.binarizer_type == "gbdt":
             self._enc = ThresholdGuessBinarizer(
@@ -853,38 +654,25 @@ class ReSPLIT:
             self._enc = NumericBinarizer(max_thresholds=self.max_thresholds)
         return np.asarray(self._enc.fit_transform(X, y), dtype=bool)
 
-    # ------------------------------------------------------------------
-    # Internal: greedy prefix (for diversity)
-    # ------------------------------------------------------------------
-
     def _greedy_prefix(self, X, y, feature_order, depth):
-        """Build a greedy prefix with a specific feature evaluation order."""
+        """Build a greedy prefix."""
         reorder = np.array(feature_order, dtype=int)
         builder = GreedyTreeBuilder(
             depth_budget=depth,
             reg=self.reg,
             max_features=self.max_features,
             feature_order=reorder,
-            pick_first=True,    # diversity: use shuffled order, not best-entropy
+            pick_first=True,
             global_N=self._n_total,
         )
         tree, loss = builder.build(X, y)
         return tree, loss
 
-    # ------------------------------------------------------------------
-    # Internal: leaf completion with subtree enumeration
-    # ------------------------------------------------------------------
-
     def _enumerate_completions(self, prefix_tree, X, y, remaining_depth):
-        """For each leaf, enumerate 1-2 near-optimal completions.
-
-        Follows Algorithm 5: greedy sets upper bound Lg, then solver
-        finds subtrees with loss ≤ Lg.
-        """
+        """Enumerate leaf completions."""
         leaves_data = self._collect_leaves(prefix_tree, X, y)
         all_trees = []
 
-        # For each leaf, generate subtree options
         leaf_options = []
         for leaf_mask, y_leaf in leaves_data:
             options = []
@@ -894,8 +682,6 @@ class ReSPLIT:
                 leaf_options.append(options)
                 continue
 
-            # Algorithm 5 line 7: Greedy upper bound Lg
-            # Use global-N normalisation with original λ (not scaled_reg).
             gbuilder = GreedyTreeBuilder(
                 depth_budget=remaining_depth,
                 reg=self.reg,
@@ -907,11 +693,8 @@ class ReSPLIT:
             greedy_global = self._compute_objective(
                 greedy_st, X[leaf_mask], y_leaf)
 
-            # Option 1: greedy completion
             options.append(greedy_st)
 
-            # Algorithm 5 line 8: find subtrees with loss ≤ Lg
-            # Use our solver with the greedy loss as upper bound
             if remaining_depth > 0:
                 try:
                     sub_solver = OptimalTreeSolver(
@@ -926,16 +709,13 @@ class ReSPLIT:
                         X[leaf_mask], y_leaf,
                         upper_bound_tree=(greedy_st, greedy_global),
                     )
-                    # Only add if structurally different from greedy
                     if not self._trees_equal(opt_st, greedy_st):
                         options.append(opt_st)
                 except Exception:
-                    pass  # solver timed out, just use greedy
+                    pass
 
             leaf_options.append(options)
 
-        # Cross-product: one tree per combination of leaf options
-        # (prefer the first option = greedy for each leaf)
         for combo_idx in range(max(len(opts) for opts in leaf_options)):
             tree = self._build_combination(prefix_tree, X, y, leaf_options, combo_idx)
             if tree is not None:
@@ -945,7 +725,7 @@ class ReSPLIT:
         return all_trees if all_trees else [(prefix_tree, self._compute_objective(prefix_tree, X, y))]
 
     def _collect_leaves(self, node, X, y):
-        """Collect (mask, y) tuples for all leaf subproblems."""
+        """Collect leaf subproblems."""
         result = []
         self._collect_leaves_impl(node, X, y, np.ones(len(y), dtype=bool), result)
         return result
@@ -960,7 +740,7 @@ class ReSPLIT:
             self._collect_leaves_impl(node.right_child, X, y, right_mask, result)
 
     def _build_combination(self, node, X, y, leaf_options, idx):
-        """Build a tree by selecting option idx (mod len) for each leaf."""
+        """Build a tree from leaf options."""
         opt_idx = [0]
         return self._build_combo_impl(node, X, y, leaf_options, idx, opt_idx)
 
@@ -985,19 +765,15 @@ class ReSPLIT:
                 right_child=right_child,
             )
 
-    # ------------------------------------------------------------------
-    # Internal: evaluation & dedup
-    # ------------------------------------------------------------------
-
     def _compute_objective(self, tree, X, y):
-        """Compute regularized objective: misclass/N + λ·num_leaves."""
+        """Compute regularized objective."""
         preds = predict_batch(X, tree, np.array(self.classes_))
         n_err = int(np.sum(preds != y))
         return n_err / self._n_total + self.reg * num_leaves(tree)
 
     @staticmethod
     def _is_duplicate(tree, candidates):
-        """Check if tree is structurally identical to any existing candidate."""
+        """Check for structural duplicates."""
         for existing, _ in candidates:
             if ReSPLIT._trees_equal(tree, existing):
                 return True
@@ -1009,50 +785,8 @@ class ReSPLIT:
         return are_trees_equal(t1, t2)
 
 
-# ============================================================
-# LicketySPLIT — Polynomial-time recursive SPLIT
-# ============================================================
-# Algorithm 3 from the SPLIT paper:
-#
-#   t_lookahead = SPLIT(ℓ, D, λ, 1, d, 0)   // dl=1, no postprocessing
-#   for each child u of t_lookahead:
-#       λu = λ * |D| / |D(u)|
-#       tu = LicketySPLIT(ℓ, D(u), λu, d-1)
-#       Replace u with tu
-#
-# SPLIT with dl=1 evaluates the optimal root split by computing
-# GreedyTree(D(f), d-1) + GreedyTree(D(¬f), d-1) for every feature f.
-# The recursion then replaces each greedy child with the same logic.
-#
-# Runtime: O(n · k² · d²) (polynomial — Theorem 6.4 in paper)
-
-
 class LicketySPLIT:
-    """LicketySPLIT: polynomial-time recursive SPLIT (Algorithm 3).
-
-    Parameters
-    ----------
-    full_depth_budget : int
-        Total depth budget d for the final tree.
-    reg : float
-        Sparsity penalty λ per leaf.
-    verbose : bool
-        Print progress.
-    binarize : bool
-        Binarize continuous features.
-    binarizer : str
-        "gbdt" or "midpoint".
-    max_features : int
-        Top-K candidate features (0 = all).
-    max_thresholds : int
-        Max midpoints per numeric feature.
-    gbdt_n_est : int
-        Number of GBDT trees for threshold guessing.
-    gbdt_max_depth : int
-        Max depth of each GBDT tree.
-    random_state : int
-        Random seed.
-    """
+    """LicketySPLIT tree builder."""
 
     def __init__(
         self,
@@ -1085,12 +819,8 @@ class LicketySPLIT:
         self._n_total = 0
         self._has_no_depth_limit = full_depth_budget == 0
 
-    # ------------------------------------------------------------------
-    # fit / predict
-    # ------------------------------------------------------------------
-
     def fit(self, X, y):
-        """Train LicketySPLIT (Algorithm 3)."""
+        """Train LicketySPLIT."""
         y = np.asarray(y, dtype=np.int64)
         self.classes_ = np.unique(y).tolist()
         self._n_total = len(y)
@@ -1130,39 +860,13 @@ class LicketySPLIT:
             return "LicketySPLIT(unfitted)"
         return str(self.tree)
 
-    # ------------------------------------------------------------------
-    # Core recursion — Algorithm 3
-    #
-    # Equivalent to SPLIT(dl=1, postprocess=False):
-    #   For every feature f, evaluate Greedy(D(f), depth-1, λu)
-    #   + Greedy(D(¬f), depth-1, λu) using renormalised λ.
-    #   Pick the best feature, then recursively apply LicketySPLIT
-    #   on each child (Algorithm 3, lines 2-8).
-    # ------------------------------------------------------------------
-
     def _recurse(self, X, y, depth):
-        """Recursive LicketySPLIT step.
-
-        Parameters
-        ----------
-        X : ndarray[bool]
-            Binary feature matrix for this subproblem.
-        y : ndarray[int64]
-            Labels for this subproblem.
-        depth : int
-            Remaining depth budget.
-
-        Returns
-        -------
-        (tree, loss) — loss is on global scale (normalised by
-        self._n_total).
-        """
+        """Recursive LicketySPLIT step."""
         n = len(y)
         if n == 0:
             leaf = SPLITLeaf(prediction=0, loss=0.0)
             return leaf, 0.0
 
-        # --- Leaf baseline (on global scale) ---
         classes, counts = np.unique(y, return_counts=True)
         y_pred = int(classes[np.argmax(counts)])
         n_wrong = int(n - counts.max())
@@ -1172,18 +876,15 @@ class LicketySPLIT:
             leaf = SPLITLeaf(prediction=y_pred, loss=n_wrong / self._n_total)
             return leaf, leaf_loss
 
-        # --- Evaluate each feature by greedy completion (SPLIT dl=1) ---
         best_loss = leaf_loss
         best_feat = -1
 
-        # Feature ranking by entropy for candidate pruning
         candidates = self._rank_features(X, y)
         if self.verbose:
             print(f"  [LicketySPLIT] depth={depth}, n={n}, "
-                  f"λ={self.reg:.6f}, leaf={leaf_loss:.6f}, "
+                  f"reg={self.reg:.6f}, leaf={leaf_loss:.6f}, "
                   f"candidates={len(candidates)}")
 
-        # Child depth budget for greedy evaluation
         child_depth = max(depth - 1, 0)
 
         for feat in candidates:
@@ -1194,8 +895,6 @@ class LicketySPLIT:
             if nl == 0 or nr == 0:
                 continue
 
-            # Greedy evaluation of full subtree for each child
-            # using global-N normalisation with original λ.
             lb = GreedyTreeBuilder(
                 depth_budget=child_depth,
                 reg=self.reg,
@@ -1212,25 +911,22 @@ class LicketySPLIT:
             )
             right_tree, right_loss = rb.build(X[right_mask], y[right_mask])
 
-            # Losses are already on global scale (global-N normalised)
             total = left_loss + right_loss
             if total < best_loss:
                 best_loss = total
                 best_feat = feat
 
         if best_feat >= 0:
-            # --- Split and recurse (Algorithm 3 lines 2-7) ---
             left_mask = X[:, best_feat]
             right_mask = ~left_mask
 
-            # Algorithm 3 line 5: recursive LicketySPLIT on children
             left_child, _ = self._recurse(
                 X[left_mask], y[left_mask], depth - 1)
             right_child, _ = self._recurse(
                 X[right_mask], y[right_mask], depth - 1)
 
             if self.verbose:
-                print(f"    → split feat={best_feat}, "
+                print(f"    split feat={best_feat}, "
                       f"loss={best_loss:.6f} (leaf={leaf_loss:.6f})")
             return (
                 SPLITNode(feature=int(best_feat),
@@ -1239,7 +935,6 @@ class LicketySPLIT:
                 best_loss,
             )
 
-        # No split improves leaf → return leaf
         return (
             SPLITLeaf(prediction=y_pred, loss=n_wrong / self._n_total),
             leaf_loss,
@@ -1251,10 +946,6 @@ class LicketySPLIT:
             return 1
         return (LicketySPLIT._count_leaves(node.left_child)
                 + LicketySPLIT._count_leaves(node.right_child))
-
-    # ------------------------------------------------------------------
-    # Feature ranking (entropy gain)
-    # ------------------------------------------------------------------
 
     def _rank_features(self, X, y):
         m = X.shape[1]
@@ -1291,10 +982,6 @@ class LicketySPLIT:
         if len(p) <= 1:
             return 0.0
         return float(-np.sum(p * np.log2(p)))
-
-    # ------------------------------------------------------------------
-    # Binarization
-    # ------------------------------------------------------------------
 
     def _binarize_fit_transform(self, X, y):
         if self.binarizer_type == "gbdt":
